@@ -105,6 +105,7 @@ function Extension:SetAutoPlay(enabled)
         end
         self.AutoPlayStatus = "Experimental: scanning"
     else
+        if self.ResetOffense then self:ResetOffense() end
         self:StopAutoMove()
         for name, value in pairs(self.AutoPlaySnapshot or {}) do
             -- Restore only values that still match the ones Auto-play applied.
@@ -153,14 +154,21 @@ function Extension:InShotRange(root)
     return false
 end
 function Extension:AutoPlayStep(character, humanoid, root)
-    if self:IsManual() then self:StopAutoMove(); self.AutoPlayStatus = "Paused: manual input"; return end
+    if self:IsManual() then
+        if self.ResetOffense then self:ResetOffense() end
+        self:StopAutoMove(); self.AutoPlayStatus = "Paused: manual input"; return
+    end
     if heldBall(character) then
+        self:ClearTarget()
+        if self.OffenseStep and not self:OffenseStep(character, humanoid, root) then return end
         self:StopAutoMove()
-        self.AutoPlayStatus = "Waiting for calibrated shot position"
+        self.AutoPlayStatus = "Open shot: settling"
         if self.Settings.Aimbot and self.AimAction and not self.Shooting and self.Clock - self.LastShot >= 1.25 and self:InShotRange(root) then
             self.Shooting, self.LastShot, self.AutoPlayStatus = true, self.Clock, "Shooting (experimental)"
             self.Environment.task.spawn(function()
-                if self.Alive and self.Settings.AutoPlay and self.Player.Character == character and heldBall(character) then
+                if self.Alive and self.Settings.AutoPlay and not self:IsManual() and self.Player.Character == character
+                    and humanoid.Health > 0 and heldBall(character) and self:InShotRange(root)
+                    and (not self.CanTakeShot or self:CanTakeShot(root)) then
                     humanoid.Jump = true
                     local ok, message = pcall(self.AimAction)
                     if not ok then self.AutoPlayStatus = "Shot unavailable: " .. tostring(message) end
@@ -169,22 +177,29 @@ function Extension:AutoPlayStep(character, humanoid, root)
             end)
         end
     elseif self.Target and self.Settings.AutoGuard then
+        if self.ResetOffense then self:ResetOffense() end
         self:StopAutoMove(); self.AutoPlayStatus = "Defending the Ball Check target"
     else
+        if self.ResetOffense then self:ResetOffense() end
         local ball = self:LooseBall(root)
         if ball then
-            self.AutoMovePoint, self.AutoPlayStatus = ball.Position, "Seeking loose ball"
+            self.AutoMovePoint = self.SteerTo and self:SteerTo(root, ball.Position, {}) or ball.Position
+            self.AutoPlayStatus = self.AutoMovePoint and "Seeking loose ball" or "Pickup route blocked"
         else self:StopAutoMove(); self.AutoPlayStatus = "Scanning nearby balls" end
     end
 end
 function Extension:Tick(dt)
     if not self.Alive or not self.Settings then return end
     self.Clock = self.Clock + math.max(0, math.min(dt, 0.5))
+    if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     self.TickAccumulator = (self.TickAccumulator or 0) + dt
     if self.TickAccumulator < 0.1 then return end
     self.TickAccumulator = 0
     local character, humanoid, root = characterParts(self.Player)
-    if not humanoid then self:ClearTarget(); self:StopAutoMove(); self.AutoPlayStatus = "Waiting for respawn"; return end
+    if not humanoid then
+        if self.ResetOffense then self:ResetOffense() end
+        self:ClearTarget(); self:StopAutoMove(); self.AutoPlayStatus = "Waiting for respawn"; return
+    end
     if self.Settings.AutoGuard and self.Selector and not heldBall(character) and not self:IsManual() then
         self:SelectTarget(self.Selector())
     else self:ClearTarget() end
@@ -198,6 +213,8 @@ function Extension:Install(environment, settings)
         settings.AimbotKeybind = nil
         settings.AutoGuardJumpMatch = UltimatePreferences.MatchTargetJump
         settings.AutoPlay = false
+        settings.AutoPlayDribble = true
+        settings.AutoPlayBasket = "Nearest"
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -209,6 +226,8 @@ function Extension:Install(environment, settings)
     settings.AimbotKeybind = nil
     settings.AutoGuardJumpMatch = UltimatePreferences.MatchTargetJump
     settings.AutoPlay = false
+    settings.AutoPlayDribble = true
+    settings.AutoPlayBasket = "Nearest"
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -220,7 +239,7 @@ function Extension:Install(environment, settings)
     self.Run:BindToRenderStep(self.RenderName, environment.Enum.RenderPriority.Camera.Value + 1, function()
         if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self.Target and not self:IsManual() then
             local character, humanoid = characterParts(self.Player)
-            if humanoid and not heldBall(character) then humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true end
+            if humanoid and not self.Shooting then humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true end
         end
     end)
 end
@@ -233,6 +252,14 @@ function Extension:InstallControls(section)
     section:NewToggle({Title = "Auto-play (Experimental)", Default = false, Callback = function(value)
         self:SetAutoPlay(value)
     end})
+    section:NewToggle({Title = "Auto-play dribble", Default = true, Callback = function(value)
+        self.Settings.AutoPlayDribble = value
+        if not value and self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(true) end
+    end})
+    section:NewDropdown({Title = "Attack basket", Data = {"Nearest", "Second nearest"}, Default = "Nearest", Callback = function(value)
+        self.Settings.AutoPlayBasket = value
+        if self.ResetOffense then self:ResetOffense() end
+    end})
 end
 function Extension:ObserveInstance(target, key, value, environment)
     if key == "Name" and value == "RobloxGameGui" and environment.typeof(target) == "Instance" then
@@ -243,6 +270,7 @@ end
 function Extension:Destroy()
     if not self.Alive then return end
     self:SetAutoPlay(false)
+    if self.ResetOffense then self:ResetOffense() end
     self:ClearTarget(); self:StopAutoMove()
     self.Alive = false
     for _, connection in ipairs(self.Connections) do disconnect(connection) end

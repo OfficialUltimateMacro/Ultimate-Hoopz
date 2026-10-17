@@ -74,7 +74,7 @@ local function makeClosure(prototype, upvalues, environment)
     return customizeClosure and customizeClosure(name,original,environment,upvalues) or original
 end
 '''
-lines=[helpers, (ROOT/'customizations.lua').read_text(encoding='utf-8'), (ROOT/'extensions.lua').read_text(encoding='utf-8')]
+lines=[helpers, (ROOT/'customizations.lua').read_text(encoding='utf-8'), (ROOT/'extensions.lua').read_text(encoding='utf-8'), (ROOT/'offense.lua').read_text(encoding='utf-8')]
 for path,p in functions.items():lines.append('prototypes['+json.dumps(path)+']={};prototypeNames[prototypes['+json.dumps(path)+']]='+json.dumps(path))
 for path,p in functions.items():
     lines.append('-- Recovered metadata: '+path)
