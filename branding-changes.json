@@ -5,8 +5,28 @@
     "after": "Ultimate"
   },
   {
+    "location": "root.6.366",
+    "before": "http://www.roblox.com/asset/?id=130354021852199",
+    "after": "Ultimate wordmark"
+  },
+  {
     "location": "root.6.1926",
     "before": "blessed",
     "after": "Ultimate"
+  },
+  {
+    "location": "root.6.1933",
+    "before": "http://www.roblox.com/asset/?id=130354021852199",
+    "after": "Ultimate wordmark"
+  },
+  {
+    "location": "root.6.2189",
+    "before": "http://www.roblox.com/asset/?id=130354021852199",
+    "after": "Ultimate wordmark"
+  },
+  {
+    "location": "root.1083.47.6.81",
+    "before": "rbxassetid://130354021852199",
+    "after": "Ultimate wordmark"
   }
 ]

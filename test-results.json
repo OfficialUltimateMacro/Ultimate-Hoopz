@@ -5,5 +5,20 @@
   "startup_completed_in_both": true,
   "startup_traces_equal": true,
   "scheduled_gameplay_tasks_tested": false,
-  "live_Hoopz_tested": false
+  "live_Hoopz_tested": false,
+  "Hoopz_mock_startup": "pass",
+  "Hoopz_mock_actions": 2051,
+  "requested_defaults_verified": {
+    "magnet": true,
+    "reachStrength": 10,
+    "magnetStrength": 50,
+    "reach": true,
+    "aimKey": "Enum.KeyCode.L",
+    "antiDrop": true,
+    "walkSpeed": 0.01
+  },
+  "aim_key_picker_removed": true,
+  "guard_key_picker_retained": true,
+  "logo_cache_and_fallback": "pass",
+  "logo_transparency_verified": true
 }

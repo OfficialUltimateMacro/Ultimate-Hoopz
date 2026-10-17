@@ -27,6 +27,9 @@ def literal(v,path=''):
     if isinstance(v,str):
         if v in ['Infinity','-Infinity','NaN']:return {'Infinity':'math.huge','-Infinity':'-math.huge','NaN':'(0/0)'}[v]
         new=v
+        if v in ('http://www.roblox.com/asset/?id=130354021852199','rbxassetid://130354021852199'):
+            brand_changes.append({'location':path,'before':v,'after':'Ultimate wordmark'})
+            return 'ULTIMATE_LOGO_TOKEN'
         if v=='blessed' or v=='Blessed' or v=='BLESSED':new='Ultimate'
         # Keep external ownership/dependency URLs as supplied; changing a remote
         # destination is not a branding-only transformation.
@@ -68,14 +71,17 @@ local function makeClosure(prototype, upvalues, environment)
     return functions[prototypeNames[prototype]](environment, upvalues)
 end
 '''
-lines=[helpers]
+lines=[helpers, (ROOT/'customizations.lua').read_text(encoding='utf-8')]
 for path,p in functions.items():lines.append('prototypes['+json.dumps(path)+']={};prototypeNames[prototypes['+json.dumps(path)+']]='+json.dumps(path))
 for path,p in functions.items():
     lines.append('-- Recovered metadata: '+path)
     for field,value in p.items():
         lines.append('prototypes['+json.dumps(path)+']['+field+']='+literal(value,path+'.'+field))
+lines.append('applyUltimateDefaults(prototypes.root)')
 
 opcodes['5']=opcodes['100'];opcodes['23']=opcodes['89'];opcodes['47']=opcodes['37'];opcodes['85']=opcodes['56']
+opcodes['92']='applyUltimateProperty(l[Y[t]],W[t],U[t],A);'
+opcodes['122']='applyUltimateProperty(l[Y[t]],U[t],l[R[t]],A);'
 if runtime_mode:
     for special,ordinary in [(5,100),(23,89),(47,37),(85,56)]:opcodes[str(special)]='i[t]='+str(ordinary)+';'+opcodes[str(special)]
 # These four instructions cache an equivalent ordinary operation into their
@@ -135,13 +141,13 @@ for path,p in items:
         '        local varargCount,varargs,openUpvalues',
         '        while true do']
     if runtime_mode:
-        lines+=['            local opcode=instructions[pc]', '            if type(opcode)~="number" or opcode<0 or opcode>124 then error("Unresolved instruction in "..prototypeNames[prototype].." at "..tostring(pc)) end']
+        lines+=['            if prototype == prototypes.root and pc == 1346 and UltimatePreferences.HideAimbotKeyPicker then top=operandR[pc]-1;pc=pc+1 end', '            local opcode=instructions[pc]', '            if type(opcode)~="number" or opcode<0 or opcode>124 then error("Unresolved instruction in "..prototypeNames[prototype].." at "..tostring(pc)) end']
         lines+=dispatch([(o,o) for o in range(125)],'            ')
     else:lines+=dispatch(slots,'            ')
     lines+=['            pc=pc+1','        end','    end','end']
 if runtime_mode:
     lines+=['for name,prototype in pairs(prototypes) do','    local current=prototype','    functions[name]=function(environment,upvalues) return runPrototype(current,environment,upvalues) end','end']
-lines+=['\nif rawget(_G,"ULTIMATE_BLESSED_INSPECT") then return {Functions=functions,Prototypes=prototypes,Names=prototypeNames} end',
+lines+=['\nif rawget(_G,"ULTIMATE_BLESSED_INSPECT") then return {Functions=functions,Prototypes=prototypes,Names=prototypeNames,Preferences=UltimatePreferences,ApplyProperty=applyUltimateProperty,ResolveLogo=resolveUltimateLogo} end',
         'return functions.root(getEnvironment(),{})(...)']
 source='\n'.join(lines)+'\n'
 path=ROOT/('Ultimate.Blessed.decoded.lua' if runtime_mode else 'Ultimate.Blessed.register-source.lua');path.write_text(source,encoding='utf-8',newline='\n')
