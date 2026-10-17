@@ -1,6 +1,8 @@
 -- Editable Ultimate preferences layered over the recovered Blessed program.
 local UltimatePreferences = {
-    AimbotKey = "L", HideAimbotKeyPicker = true,
+    AutoGuardKey = "L", HideAimbotKeyPicker = true,
+    Aimbot = true, AutoGuard = true, BallCheck = true,
+    MatchTargetJump = true, AutoPlay = false,
     BallMagnet = true, MagnetStrength = 50,
     BallReach = true, ReachStrength = 10,
     WalkSpeed = 0.01, AntiDrop = true,
@@ -26,6 +28,7 @@ local function resolveUltimateLogo(environment)
     return logoImage
 end
 local function applyUltimateProperty(target, key, value, environment)
+    if UltimateExtensions then UltimateExtensions:ObserveInstance(target, key, value, environment) end
     if key == "Image" and value == ULTIMATE_LOGO_TOKEN
         and environment.typeof(target) == "Instance" then
         local resolved = resolveUltimateLogo(environment)
@@ -51,7 +54,12 @@ local function applyUltimateDefaults(root)
     -- The original decoded data stays untouched on disk. These sites are the
     -- recovered initializer operations, applied before self-modification runs.
     assert(root[6][1972] == "X", "Unexpected aimbot initializer")
-    root[6][1972] = UltimatePreferences.AimbotKey
+    root[6][1969] = UltimatePreferences.Aimbot
+    root[6][1972] = "Unknown" -- The initializer assignment itself is skipped.
+    root[6][1978] = UltimatePreferences.AutoGuard
+    root[6][1979] = UltimatePreferences.BallCheck
+    root[6][2038] = UltimatePreferences.AutoGuardKey
+    root[6][1399] = "Auto Guard key"
     root[6][1977] = UltimatePreferences.WalkSpeed
     root[6][2009] = UltimatePreferences.BallReach
     root[6][2010] = UltimatePreferences.ReachStrength

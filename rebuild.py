@@ -49,6 +49,7 @@ helpers='''-- Ultimate / Blessed decoded register-source
 -- Original UI and gameplay functions are retained; this is not Ultimate 1.1.
 local BRAND = "Ultimate"
 local prototypes, functions, prototypeNames = {}, {}, {}
+local customizeClosure, UltimateExtensions
 local unpackValues = table.unpack or unpack
 local function slice(first, values, last) return unpackValues(values, first, last or #values) end
 local function packValues(...) return select("#", ...), {...} end
@@ -68,10 +69,12 @@ local bitFunctions={
 }
 local function getEnvironment() return getfenv and getfenv() or _G end
 local function makeClosure(prototype, upvalues, environment)
-    return functions[prototypeNames[prototype]](environment, upvalues)
+    local name=prototypeNames[prototype]
+    local original=functions[name](environment, upvalues)
+    return customizeClosure and customizeClosure(name,original,environment,upvalues) or original
 end
 '''
-lines=[helpers, (ROOT/'customizations.lua').read_text(encoding='utf-8')]
+lines=[helpers, (ROOT/'customizations.lua').read_text(encoding='utf-8'), (ROOT/'extensions.lua').read_text(encoding='utf-8')]
 for path,p in functions.items():lines.append('prototypes['+json.dumps(path)+']={};prototypeNames[prototypes['+json.dumps(path)+']]='+json.dumps(path))
 for path,p in functions.items():
     lines.append('-- Recovered metadata: '+path)
@@ -141,13 +144,13 @@ for path,p in items:
         '        local varargCount,varargs,openUpvalues',
         '        while true do']
     if runtime_mode:
-        lines+=['            if prototype == prototypes.root and pc == 1346 and UltimatePreferences.HideAimbotKeyPicker then top=operandR[pc]-1;pc=pc+1 end', '            local opcode=instructions[pc]', '            if type(opcode)~="number" or opcode<0 or opcode>124 then error("Unresolved instruction in "..prototypeNames[prototype].." at "..tostring(pc)) end']
+        lines+=['            if prototype == prototypes.root then', '                if pc == 1973 then pc=1974 end -- No aimbot key binding.', '                if pc == 1346 and UltimatePreferences.HideAimbotKeyPicker then top=operandR[pc]-1;pc=pc+1 end', '                observeUltimateRoot(environment,registers,pc)', '            end', '            local opcode=instructions[pc]', '            if type(opcode)~="number" or opcode<0 or opcode>124 then error("Unresolved instruction in "..prototypeNames[prototype].." at "..tostring(pc)) end']
         lines+=dispatch([(o,o) for o in range(125)],'            ')
     else:lines+=dispatch(slots,'            ')
     lines+=['            pc=pc+1','        end','    end','end']
 if runtime_mode:
     lines+=['for name,prototype in pairs(prototypes) do','    local current=prototype','    functions[name]=function(environment,upvalues) return runPrototype(current,environment,upvalues) end','end']
-lines+=['\nif rawget(_G,"ULTIMATE_BLESSED_INSPECT") then return {Functions=functions,Prototypes=prototypes,Names=prototypeNames,Preferences=UltimatePreferences,ApplyProperty=applyUltimateProperty,ResolveLogo=resolveUltimateLogo} end',
+lines+=['\nif rawget(_G,"ULTIMATE_BLESSED_INSPECT") then return {Functions=functions,Prototypes=prototypes,Names=prototypeNames,Preferences=UltimatePreferences,ApplyProperty=applyUltimateProperty,ResolveLogo=resolveUltimateLogo,Extensions=UltimateExtensions,CustomizeClosure=customizeClosure} end',
         'return functions.root(getEnvironment(),{})(...)']
 source='\n'.join(lines)+'\n'
 path=ROOT/('Ultimate.Blessed.decoded.lua' if runtime_mode else 'Ultimate.Blessed.register-source.lua');path.write_text(source,encoding='utf-8',newline='\n')

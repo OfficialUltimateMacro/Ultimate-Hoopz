@@ -1,24 +1,33 @@
 {
   "syntax": "pass",
   "recovered_functions": 164,
-  "startup_trace_actions": 654,
+  "startup_trace_actions": null,
   "startup_completed_in_both": true,
-  "startup_traces_equal": true,
+  "startup_traces_equal": "historical baseline only; current UI additions intentionally differ",
   "scheduled_gameplay_tasks_tested": false,
   "live_Hoopz_tested": false,
   "Hoopz_mock_startup": "pass",
-  "Hoopz_mock_actions": 2051,
+  "Hoopz_mock_actions": 2152,
   "requested_defaults_verified": {
-    "magnet": true,
-    "reachStrength": 10,
-    "magnetStrength": 50,
-    "reach": true,
-    "aimKey": "Enum.KeyCode.L",
     "antiDrop": true,
-    "walkSpeed": 0.01
+    "guard": true,
+    "guardKey": "Enum.KeyCode.L",
+    "reach": true,
+    "aim": true,
+    "ballCheck": true,
+    "autoPlay": false,
+    "jumpMatch": true,
+    "magnet": true,
+    "walkSpeed": 0.01,
+    "reachStrength": 10,
+    "magnetStrength": 50
   },
   "aim_key_picker_removed": true,
   "guard_key_picker_retained": true,
   "logo_cache_and_fallback": "pass",
-  "logo_transparency_verified": true
+  "logo_transparency_verified": true,
+  "aim_key_binding_removed": true,
+  "guard_key_label_and_notification": "Auto Guard",
+  "native_extension_regressions": "pass: guard-only key, processed/typing input, selector identity/switch/lost ball/own ball/respawn/cooldown/manual priority, settings rebinding, autoplay restore/pickup ownership/shot range and cooldown/death/cleanup",
+  "experimental_autoplay_default": false
 }
