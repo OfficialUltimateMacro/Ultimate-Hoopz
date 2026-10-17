@@ -1,0 +1,9 @@
+{
+  "syntax": "pass",
+  "recovered_functions": 164,
+  "startup_trace_actions": 654,
+  "startup_completed_in_both": true,
+  "startup_traces_equal": true,
+  "scheduled_gameplay_tasks_tested": false,
+  "live_Hoopz_tested": false
+}
