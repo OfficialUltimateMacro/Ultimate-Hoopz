@@ -50,5 +50,6 @@
   "autoplay_key_ui_regression": "pass: J toggle on/off, UI sync, processed and typing ignored",
   "auto_jump_regression": "pass: Space/state fallback, confirmed rising before shot, duplicate suppression, blocked timeout, cancellation, release, physical Space preserved",
   "active_dribble_regression": "pass: grounded close defender R, .4s follow-up move, R after1.1s",
-  "UI_labels": "Auto-play and Player collisions shortened; full startup verifies labels; no live pixel test"
+  "UI_labels": "Auto-play and Player collisions shortened; full startup verifies labels; no live pixel test",
+  "autoplay_key_notifications": "pass: one Enabled/Disabled notification per accepted key toggle; no notice for processed/typing input"
 }

@@ -35,7 +35,8 @@ local function settings()return {Aimbot=true,AutoGuard=true,AutoGuardKeybind='L'
 local s=settings();e:Install(env,s);assert(s.AimbotKeybind==nil and s.AutoPlay==false and s.AutoGuardJumpMatch)
 local newer=settings();e:Install(env,newer);s=newer
 local title,aimChanges,guardChanges=nil,0,0
-local captures={[0]=s,[1]={SetValue=function()aimChanges=aimChanges+1 end},[3]={SetValue=function()guardChanges=guardChanges+1 end},[2]={Notification=function()return{new=function(t)title=t.Title end}end}}
+local description,notices=nil,0
+local captures={[0]=s,[1]={SetValue=function()aimChanges=aimChanges+1 end},[3]={SetValue=function()guardChanges=guardChanges+1 end},[2]={Notification=function()return{new=function(t)title=t.Title;description=t.Description;notices=notices+1 end}end}}
 local handler=app.CustomizeClosure('root.2169',function()error('old handler ran')end,env,captures)
 handler({KeyCode='L'},false);assert(not s.AutoGuard and s.Aimbot and title=='Auto Guard' and aimChanges==0 and guardChanges==1)
 handler({KeyCode='L'},true);handler({KeyCode='X'},false);assert(not s.AutoGuard)
@@ -44,9 +45,12 @@ handler({KeyCode='L'},false);assert(s.AutoGuard and s.Aimbot and guardChanges==2
 assert(s.AutoPlayKeybind=='J')
 local shown;e.AutoPlayToggle={SetValue=function(value)shown=value end}
 handler({KeyCode='J'},false);assert(s.AutoPlay and shown==true,'J enables autoplay and its UI')
+assert(title=='Auto-play' and description=='Enabled');local before=notices
 handler({KeyCode='J'},true);assert(s.AutoPlay,'processed J ignored')
 input.focus=true;handler({KeyCode='J'},false);assert(s.AutoPlay,'typing J ignored');input.focus=nil
+assert(notices==before,'ignored J does not notify')
 handler({KeyCode='J'},false);assert(not s.AutoPlay and shown==false and s.Aimbot and s.AutoGuard,'J disables and restores')
+assert(title=='Auto-play' and description=='Disabled' and notices==before+1,'one notification per toggle')
 local selected=a;e.Selector=function()return selected end
 e:SelectTarget(a);ah.Jumping:Fire(true);assert(oh.Jump and e.LastJump==e.Clock)
 oh.Jump=false;ah.Jumping:Fire(true);assert(not oh.Jump,'jump cooldown')

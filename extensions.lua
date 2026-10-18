@@ -77,6 +77,11 @@ function Extension:GuardKey(input, processed, captures)
         and input.KeyCode ~= settings.AutoGuardKeybind then
         self.Settings, self.InputCaptures = settings, captures
         self:SetAutoPlay(not settings.AutoPlay)
+        if captures[2] and type(captures[2].Notification) == "function" then
+            pcall(function()
+                captures[2].Notification().new({Title = "Auto-play", Description = settings.AutoPlay and "Enabled" or "Disabled", Duration = 2})
+            end)
+        end
         return
     end
     if not settings or input.KeyCode ~= settings.AutoGuardKeybind then return end
