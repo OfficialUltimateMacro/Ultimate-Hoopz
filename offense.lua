@@ -159,14 +159,23 @@ function Extension:ShotLaneClear(root, goal, params)
     if not params or not goal then return false end
     -- Conservative straight line to basket; this is not a ballistic simulation.
     local hit = self.Environment.workspace:Raycast(root.Position, goal.Position-root.Position, params)
-    return hit == nil or hit.Instance == goal
+    if hit==nil or hit.Instance==goal then return true end
+    -- The goal's rim/backboard can intercept a straight diagnostic ray even
+    -- though the recovered shot follows an arc into that same basket.
+    return hit.Position and (hit.Position-goal.Position).Magnitude<=5
+        and hit.Position.Y>=goal.Position.Y-2
 end
 function Extension:CanTakeShot(root)
     local goal = self.OffenseGoal
-    if not goal or not goal.Parent or self:NearestGoal(root) ~= goal then return false end
+    if not goal or not goal.Parent then self.ShotBlockReason="No attack basket selected";return false end
+    if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
     local space, jumping = self:SpaceAt(root.Position, self:ReadOpponents(root))
-    return space >= 12 and not jumping and self:InShotRange(root)
-        and self:ShotLaneClear(root, goal, self:MakeRayParams())
+    if space<12 then self.ShotBlockReason="Defender too close";return false end
+    if jumping then self.ShotBlockReason="Defender contesting in the air";return false end
+    if not self:InShotRange(root) then self.ShotBlockReason="Outside shooting range";return false end
+    if not self:ShotLaneClear(root,goal,self:MakeRayParams()) then self.ShotBlockReason="Shot line blocked";return false end
+    self.ShotBlockReason="Open and in range"
+    return true
 end
 function Extension:PickShotSpot(root, opponents, params)
     local goal = self.OffenseGoal

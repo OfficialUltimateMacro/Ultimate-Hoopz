@@ -63,6 +63,18 @@ world.wall=true;local point=e:SteerTo(root,root.Position+v(-20,0,0),{});assert(p
 world.wall=false;world.edge=true
 point=e:SteerTo({Position=v(100,3,0)},v(100,3,20),{});assert(not point or point.Z<=1,'no unsupported floor route')
 world.edge=false;world.blockShot=true;assert(not e:CanTakeShot(root),'obstructed shot rejected');world.blockShot=false
+local raycast=world.Raycast
+world.Raycast=function(self,origin,d,params)
+ if d.Y>1 then return{Instance={},Position=goal.Position+v(0,0,1)}end
+ return raycast(self,origin,d,params)
+end
+assert(e:CanTakeShot(root),'rim/backboard endpoint does not reject an arced shot')
+world.Raycast=function(self,origin,d,params)
+ if d.Y>1 then return{Instance={},Position=root.Position+v(-15,3,0)}end
+ return raycast(self,origin,d,params)
+end
+assert(not e:CanTakeShot(root) and e.ShotBlockReason=='Shot line blocked','distant obstacle still blocks')
+world.Raycast=raycast
 -- Screenshot control mapping and cooldown, possession hand, and pressure reads.
 e:ReleaseDribbleKeys(true);e.Clock=4;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.Position=root.Position+v(-10,0,0);own.Character.ball.Position=root.Position+v(0,0,-1)
 e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball)

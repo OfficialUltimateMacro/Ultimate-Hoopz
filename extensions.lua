@@ -188,23 +188,34 @@ function Extension:AutoPlayStep(character, humanoid, root)
                 local ok, message = pcall(function()
                     if not valid() then return end
                     self.ShotAttempt = {Valid=valid, Dispatched=false}
+                    local attempt=self.ShotAttempt
+                    self.ShotAttempts=(self.ShotAttempts or 0)+1
                     self.AutoJumpSuppressUntil=self.Clock+0.7
                     self.AutoPlayStatus = "Jumping for shot"
-                    if self:RequestAutoJump(humanoid,root,valid) and valid() then
-                        self.AutoPlayStatus = "Shooting (experimental)"
-                        if not self.ShotAttempt.Dispatched then
-                            self.ShotAttempt.Dispatched=true
-                            self.AimAction()
-                        else
-                            for _=1,40 do
-                                if self.ShotAttempt.Completed or not self.Alive then break end
-                                self.Environment.task.wait(0.025)
-                            end
-                            if self.ShotAttempt.Error then error(self.ShotAttempt.Error) end
-                        end
-                    elseif valid() then self.AutoPlayStatus = "Jump did not start: retrying" end
+                    -- JumpRequest starts Blessed's delayed shot BEFORE takeoff.
+                    -- Schedule that same routine independently of jump detection.
+                    attempt.Dispatched=true
+                    self.Environment.task.spawn(function()
+                        local shotOK,shotError=pcall(function()
+                            if attempt.Valid() then self.AimAction() end
+                        end)
+                        attempt.Completed=true
+                        if not shotOK then attempt.Error=tostring(shotError) end
+                    end)
+                    local jumped=self:RequestAutoJump(humanoid,root,valid)
+                    self.LastJumpConfirmed=jumped
+                    for _=1,40 do
+                        if attempt.Completed or not self.Alive then break end
+                        self.Environment.task.wait(0.025)
+                    end
+                    if attempt.Error then error(attempt.Error) end
+                    self.LastShotResult=jumped and "Shot routine sent with jump" or "Shot routine sent; jump unconfirmed"
+                    self.AutoPlayStatus=self.LastShotResult
                 end)
-                if not ok then self.AutoPlayStatus = "Shot unavailable: " .. tostring(message) end
+                if not ok then
+                    self.LastShotResult = "Shot error: " .. tostring(message)
+                    self.AutoPlayStatus = self.LastShotResult
+                end
                 if self.ReleaseJumpKey then self:ReleaseJumpKey() end
                 self.ShotAttempt = nil
                 self.Shooting = false
@@ -307,6 +318,15 @@ function Extension:InstallControls(section)
     section:NewToggle({Title = "Auto-play camera", Default = true, Callback = function(value)
         self.Settings.AutoPlayCamera=value
         if not value and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
+    end})
+    section:NewButton({Title = "Shot status", Callback = function()
+        local captures=self.InputCaptures
+        if captures and captures[2] and type(captures[2].Notification)=="function" then
+            pcall(function()
+                captures[2].Notification().new({Title="Auto-play shot status",Description=(self.LastShotResult or "No shot routine sent yet")
+                    .."\n"..tostring(self.ShotBlockReason or self.AutoPlayStatus).."\nAttempts: "..tostring(self.ShotAttempts or 0),Duration=8})
+            end)
+        end
     end})
     section:NewDropdown({Title = "Attack basket", Data = {"Nearest", "Second nearest"}, Default = "Nearest", Callback = function(value)
         self.Settings.AutoPlayBasket = value

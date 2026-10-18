@@ -7,7 +7,7 @@
   "scheduled_gameplay_tasks_tested": false,
   "live_Hoopz_tested": false,
   "Hoopz_mock_startup": "pass",
-  "Hoopz_mock_actions": 2391,
+  "Hoopz_mock_actions": 2426,
   "requested_defaults_verified": {
     "guardKey": "Enum.KeyCode.L",
     "magnet": true,
@@ -54,7 +54,10 @@
   "UI_labels": "Auto-play and Player collisions shortened; full startup verifies labels; no live pixel test",
   "autoplay_key_notifications": "pass: one Enabled/Disabled notification per accepted key toggle; no notice for processed/typing input",
   "camera_assist_regression": "pass: smooth heading, no position teleport, mouse/manual/shot/possession/toggle release, AutoRotate preservation",
-  "original_VM_shot_integration": "pass: raw root.106 mouse press/release; original timing through native and executor jump, one dispatch, key cleanup",
+  "original_VM_shot_integration": "pass: one press/release even when RequestAutoJump forced false; original dispatch independent of jump confirmation",
   "shot_settle_regression": "pass: stable position with stale velocity reaches shot attempt",
-  "opponent_prediction": "position-history velocity blend and two-step intercept-aware local steering; offline only"
+  "opponent_prediction": "position-history velocity blend and two-step intercept-aware local steering; offline only",
+  "shot_gate_regression": "pass: rim/backboard endpoint permitted, distant wall rejected",
+  "shot_status_UI": "full mocked startup verifies Shot status button; shows reason, attempts and dispatch/error",
+  "live_shooting_verified": false
 }

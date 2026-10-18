@@ -28,6 +28,10 @@ function vim:SendKeyEvent(down)if down then callback()end end
 local pressed,released=0,0;env.keypress=function()pressed=pressed+1;callback()end;env.keyrelease=function()released=released+1 end
 e.Clock=2;e:AutoPlayStep(own.Character,oh,root)
 assert(#events==2 and pressed==1 and released==1 and not e.Shooting,'native and executor jump cannot double-dispatch original shot')
+events={};e.Clock=4;oh.FloorMaterial='Ground';root.AssemblyLinearVelocity.Y=0
+e.RequestAutoJump=function()return false end;env.task.wait=function()end
+e:AutoPlayStep(own.Character,oh,root)
+assert(#events==2 and events[1][4] and not events[2][4] and e.LastJumpConfirmed==false,'original VM shot must still click when jump detection fails')
 return 'PASS: unmodified recovered root.106 produces mouse press/release, full Auto-play uses original JumpRequest timing once, executor Space cleanup and duplicate-input suppression'
 '''
 source=(folder.parent/'Ultimate.Blessed.decoded.lua').read_text(encoding='utf-8')
