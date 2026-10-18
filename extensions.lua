@@ -148,6 +148,7 @@ function Extension:SetAutoPlay(enabled)
         end
         self.AutoPlayStarted, self.State, self.StateSince = self.Clock, nil, self.Clock
         self.AutoPlayStatus = "Experimental: scanning"
+        if self.LockMatch then self:LockMatch() end
         self:Log("toggle", "Auto-play enabled (Auto Guard off)")
     else
         if self.ResetOffense then self:ResetOffense() end
@@ -173,7 +174,7 @@ function Extension:LooseBall(root)
 end
 function Extension:InShotRange(root)
     local high = self.Settings.AimbotType == "High"
-    local minimum, maximum = high and 57 or 58, high and 73 or 74
+    local minimum, maximum = high and 57 or 58, (high or self.Settings.AimbotType=="Mixed arc") and 73 or 74
     local goals = self.Goals and self:Goals() or self.Collection:GetTagged("FieldGoals")
     for _, goal in ipairs(goals) do
         if goal:IsA("BasePart") then
@@ -189,16 +190,7 @@ local function isTeammate(self, player)
 end
 -- Raw possession read: who holds the ball right now.
 function Extension:ReadPossession(character)
-    if heldBall(character) then return "Own", self.Player end
-    for _, player in ipairs(self:PlayerList()) do
-        if player ~= self.Player then
-            local other = player.Character
-            if other and other.Parent and heldBall(other) then
-                return isTeammate(self, player) and "Teammate" or "Opponent", player
-            end
-        end
-    end
-    return "Loose", nil
+    return self:SelectMatchHolder(character)
 end
 -- Explicit state with debouncing so brief reparenting during a dribble or a
 -- delayed replication does not flip offense/defense.
@@ -211,7 +203,7 @@ function Extension:UpdateState(character, humanoid, root)
         self.ResetUntil = now+0.6
         self:Log("reset", string.format("teleport %.0f studs (score/reset or respawn)", (root.Position-last).Magnitude))
     end
-    local busy = self.Shooting or (self.AimDepth or 0) > 0 or (self.DunkingUntil and now < self.DunkingUntil)
+    local busy = self.Shooting or (self.AimDepth or 0) > 0
     if self:IsManual() then state, reason = "Manual", tostring(self.ManualReason or "input")
     elseif self.ResetUntil and now < self.ResetUntil then state, reason = "Reset", "position reset"
     elseif busy then state, reason = "Shot", self.Shooting and "shot routine" or ((self.AimDepth or 0) > 0 and "aim routine" or "dunk")
@@ -335,17 +327,7 @@ function Extension:AutoPlayStep(character, humanoid, root)
         end
     else
         if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
-        local ball = self:LooseBall(root)
-        if ball then
-            local reads = self.ReadOpponents and self:ReadOpponents(root) or {}
-            local close = (ball.Position-root.Position).Magnitude < 6
-            self.AutoMovePoint = (not close and self.SteerTo) and (self:SteerTo(root, ball.Position, reads) or ball.Position) or ball.Position
-            self.AutoPlayStatus = self.AutoMovePoint and "Seeking loose ball" or "Pickup route blocked"
-        else
-            self:StopAutoMove(); self.AutoPlayStatus = "Scanning nearby balls"
-            local inGame = self.Player.GetAttribute and select(2, pcall(self.Player.GetAttribute, self.Player, "Ingame"))
-            self.StopReason = inGame == false and "not in game (waiting)" or "no ball in reach"
-        end
+        self:RecoveryStep(character,humanoid,root)
     end
 end
 function Extension:Tick(dt)
@@ -430,12 +412,17 @@ function Extension:StatusText()
     local character=self.Player and self.Player.Character
     local action=self.GameAction and self:GameAction(character)
     local manual=self.Clock<(self.ManualUntil or 0) and string.format("%s %.1fs", tostring(self.ManualReason), self.ManualUntil-now) or "none"
+    local _,_,root=characterParts(self.Player)
+    local moveDistance=root and self.AutoMovePoint and distance(root.Position,self.AutoMovePoint)
+    local moveContext=moveDistance and string.format(" | target %.1f studs away",moveDistance) or ""
     local lines={
         string.format("State %s for %.1fs | %s", tostring(self.State or "-"), now-(self.StateSince or now), self.LastTransition or "-"),
         "Holder "..name(self.Holder).." | jump target "..name(self.Target),
+        "Court "..self:GoalLabel(self.MatchGoal).." | opponent "..name(self.MatchOpponent),
+        "Context "..tostring(self.ContextReason or "-").." | "..tostring(self.CameraControlStatus or "camera idle"),
         "Basket "..tostring((self.State=="Opponent" and self.DefenseGoal or self.OffenseGoal) and (self.State=="Opponent" and self.DefenseGoal or self.OffenseGoal).Name or "-")
             .." | intent "..tostring(self.State=="Opponent" and self.DefenseIntent or self.AutoPlayStatus),
-        "Stopped: "..tostring(self.AutoMovePoint and "moving" or (self.StopReason or "-")).." | manual "..manual,
+        "Stopped: "..tostring(self.AutoMovePoint and "moving" or (self.StopReason or "-")).." | manual "..manual..moveContext,
         "Action "..tostring(action).." | shooting "..tostring(self.Shooting==true).." aim "..tostring(self.AimDepth or 0)
             .." dunking "..tostring(self.DunkingUntil~=nil and now<self.DunkingUntil),
         (self.LastShotResult or "No shot yet").." / "..tostring(self.ShotBlockReason or "-"),
@@ -566,6 +553,13 @@ function Extension:InstallControls(section)
         self.Settings.AutoPlayBasket = value
         if self.ResetOffense then self:ResetOffense() end
     end})
+    local names={"Auto (this court)"}
+    for _,player in ipairs(self:PlayerList()) do if player~=self.Player then names[#names+1]=player.Name end end
+    section:NewDropdown({Title="Opponent",Data=names,Default="Auto (this court)",Callback=function(value)
+        self.Settings.AutoPlayOpponent=value;self.MatchOpponent=nil
+    end})
+    section:NewButton({Title="Lock court here",Callback=function() self:LockMatch() end})
+    section:NewButton({Title="Lock viewed hoop",Callback=function() self:LockViewedHoop() end})
     section:NewToggle({Title = "Player collisions", Default = false, Callback = function(value)
         self:SetPlayerCollisions(value)
     end})
@@ -645,7 +639,39 @@ function Extension:Destroy()
     if self.Run and self.RenderName then self.Run:UnbindFromRenderStep(self.RenderName) end
 end
 customizeClosure = function(name, original, environment, captures)
-    if name == "root.2169" then
+    if name == "root.1083.232.12.644" then
+        return function(section, config, ...)
+            if type(config)=="table" and config.Title=="Type" and type(config.Data)=="table" then
+                local low,high=false,false
+                for _,value in ipairs(config.Data) do low=low or value=="Low";high=high or value=="High" end
+                if low and high then config.Data={"Low","Mixed arc","High"} end
+            end
+            return original(section,config,...)
+        end
+    elseif name == "root.175" then
+        return function(...)
+            local settings=captures[0]
+            if not settings or settings.AimbotType~="Mixed arc" then return original(...) end
+            local player=environment.game.Players.LocalPlayer
+            local previousPower=player:GetAttribute("Power")
+            local args=table.pack(...)
+            local ok,result,power=pcall(function()
+                settings.AimbotType="Low"
+                local low=original(table.unpack(args,1,args.n))
+                local lowPower=player:GetAttribute("Power")
+                settings.AimbotType="High"
+                local high=original(table.unpack(args,1,args.n))
+                local highPower=player:GetAttribute("Power")
+                assert(type(low)=="number" and type(high)=="number","Arc endpoint unavailable")
+                local midPower=type(lowPower)=="number" and type(highPower)=="number" and (lowPower+highPower)/2 or previousPower
+                return (low+high)/2,midPower
+            end)
+            settings.AimbotType="Mixed arc"
+            player:SetAttribute("Power",ok and power or previousPower)
+            if not ok then error(result,0) end
+            return result
+        end
+    elseif name == "root.2169" then
         Extension.InputCaptures = captures
         return function(input, processed) return Extension:GuardKey(input, processed, captures) end
     elseif name == "root.2115" then

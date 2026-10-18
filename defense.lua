@@ -13,6 +13,10 @@ local function dsegment(point, a, b)
     return dflat(point-(a+d*t)).Magnitude
 end
 function Extension:DefendedGoal(attackerRoot)
+    if self.MatchGoal and self.MatchGoal.Parent then
+        self.DefenseGoal=self.MatchGoal
+        return self.MatchGoal
+    end
     local current = self.DefenseGoal
     local best, bestDistance
     for _, goal in ipairs(self:Goals()) do

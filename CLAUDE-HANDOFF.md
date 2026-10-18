@@ -1,3 +1,19 @@
+Current update (2026-10-18): Mixed arc is the default, ordered Low / Mixed arc / High. It averages native aim offsets and Power values; shared Auto-play range is 58–73 studs. Native endpoint tests pass, but live accuracy is uncalibrated.
+
+New match.lua scopes holders, opponents and rebounds to a locked half court, retaining opponent and ball identity instead of selecting the first global holder. Opponent picker, Lock court here and Lock viewed hoop correct ambiguous adjacent courts. No verified game-specific court/team API exists; automatic nearest-hoop selection can require manual correction.
+
+Camera assistance uses capability-checked native PlayerModule mouse-lock and AutoRotate=true, with no root.CFrame assignment. It restores owned lock and previous AutoRotate on manual/shot/disable/unload. If unavailable, enable native shift-lock manually; logs explain the fallback. The simulation models engine shift-lock separately; live integration remains unverified.
+
+Dunk T holds 0.65s while continuing the approach until actual Shooting/Dunking action. No undocumented rim-hang control was added. Rebounds predict bounded landing points with court/floor checks. Logs include hoop coordinates, locked opponent, camera mode and movement distance.
+
+13 packaged offline suites plus simulated startup validate the generated build. New test_match_context.py and test_mixed_arc.py cover global-holder rejection, exact ball tracking, moving dunks, native arc/power interpolation and restoration. Legacy 1D unit tests isolate court context, covered separately in 3D. Simulated shots now release the same ball instead of spawning an unrelated replacement.
+
+Dribbles retain 0.10s minimum pacing and shots retain 1.25s retry spacing. A 0.9s retry overwrote the one-second release check before it finished; do not reintroduce that bug. Live Hoopz acceptance, accuracy and performance remain unverified.
+
+Source remains decoded register-source, not the original author's handwritten code. Rebuild includes match.lua; publisher requires passing tests bound to the exact build hash. Permanent loader remains main/Ultimate.lua; see github-publication.json for actual publication status.
+
+---
+
 # Ultimate Hoopz â€” handoff for Claude or another coding agent
 
 ## Latest (Claude, round 3): basket-aware defense, possession state, camera ownership

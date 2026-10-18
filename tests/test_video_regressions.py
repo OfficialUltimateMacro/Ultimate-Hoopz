@@ -121,6 +121,7 @@ ok('S4 left/right changes: mean lateral error',err/n<3.5,string.format('mean %.2
 -- S5: other court's hoop is nearer to us than the attacker's hoop.
 F.farGoal.Position=v(70,12,60)
 setup(v(55,3,40),v(45,3,0),false)
+e:LockMatch(F.goal) -- ambiguous adjacent court: explicitly select intended rim
 for i=1,180 do frame() end
 local along5,lat5=quality()
 ok('S5 defends the attacker hoop, not the nearest hoop',along5>0.5 and lat5<3,string.format('along %.1f lateral %.1f',along5,lat5))

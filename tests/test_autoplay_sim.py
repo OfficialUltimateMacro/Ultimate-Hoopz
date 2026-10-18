@@ -21,8 +21,8 @@ local function giveBall()local b=F.part(root.Position,'Basketball');b.Owner=own.
 e.AimAction=function()
  shots=shots+1
  if release then
-  own.Character.ball=nil
-  local target=e:NearestGoal(root) or F.goal;local flying=F.part(root.Position+v(0,3,0),'Basketball');F.balls[#F.balls+1]=flying;F.world.DescendantAdded:Fire(flying)
+  local flying=own.Character.ball;own.Character.ball=nil;flying.Owner=nil;flying.Position=root.Position+v(0,3,0)
+  local target=e:NearestGoal(root) or F.goal;F.balls[#F.balls+1]=flying;F.world.DescendantAdded:Fire(flying)
   flights[#flights+1]={part=flying,target=target.Position+v(0.5,0,0.5),t=0}
  end
 end

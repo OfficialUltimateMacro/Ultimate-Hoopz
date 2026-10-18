@@ -98,6 +98,11 @@ F.env={game={GetService=function(_,n)return assert(services[n],n)end},workspace=
  Enum={KeyCode=setmetatable({},{__index=function(_,k)return k end}),Material={Air='Air',Water='Water'},RaycastFilterType={Exclude='Exclude'},
   RenderPriority={Camera={Value=200}},CameraType={Scriptable='Scriptable'},UserInputType={MouseButton1='MB1',MouseButton2='MB2'},HumanoidStateType={Jumping='Jumping'}},
  task={spawn=function(f)F.queue[#F.queue+1]=f end,delay=function(t,f)F.queue[#F.queue+1]=f end,wait=function()end}}
+F.lock={locked=false}
+function F.lock:GetIsMouseLocked()return self.locked end
+function F.lock:OnMouseLockToggled()self.locked=not self.locked end
+F.own.PlayerScripts={FindFirstChild=function()return {} end}
+F.env.require=function()return {GetCameras=function()return {activeMouseLockController=F.lock} end}end
 function F.flush()local q=F.queue;F.queue={};for _,f in ipairs(q)do f()end end
 -- Advance one frame: heartbeat, render binding, then simple humanoid motion.
 function F.step(e,dt,speed)
@@ -105,6 +110,12 @@ function F.step(e,dt,speed)
  F.run.Heartbeat:Fire(dt)
  for _,f in pairs(F.run.bindings)do f(dt)end
  F.flush()
+ -- Native shift-lock behavior belongs to Roblox, modeled here separately
+ -- from script code so direct root writes are unnecessary.
+ if F.lock.locked and F.oh.AutoRotate then
+  local look=F.camera.CFrame.LookVector;look=v(look.X,0,look.Z)
+  F.root.CFrame=frame(F.root.Position,F.root.Position+look)
+ end
  local h=F.oh
  if h.point and not e.Shooting then
   local d=h.point-F.root.Position;d=v(d.X,0,d.Z)

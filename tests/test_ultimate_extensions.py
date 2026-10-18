@@ -8,6 +8,12 @@ local e=app.Extensions
 -- Isolate the previously shipped guard/pickup/shooting unit regressions.
 -- Full possession planning has a separate 3D world simulation suite.
 e.OffenseStep=nil;e.CanTakeShot=nil;e.SteerTo=nil
+-- Court scoping/rebounds have a full 3D fixture in test_match_context.py.
+e.LockMatch=nil;e.SelectMatchHolder=function(self,c)
+ if c.ball then return 'Own',self.Player end
+ for _,p in ipairs(self:PlayerList())do if p~=self.Player and p.Character.ball then return 'Opponent',p end end
+ return 'Loose'
+end
 e.RequestAutoJump=function(_,h)h.Jump=true;return true end
 local function signal()
  local s={listeners={}}

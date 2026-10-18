@@ -13,6 +13,11 @@ local function frame(position,target)
  return f
 end
 env.CFrame={lookAt=frame}
+local lock={locked=false}
+function lock:GetIsMouseLocked()return self.locked end
+function lock:OnMouseLockToggled()self.locked=not self.locked end
+own.PlayerScripts={FindFirstChild=function()return {} end}
+env.require=function()return {GetCameras=function()return {activeMouseLockController=lock} end}end
 local s={Aimbot=true,AutoGuard=true,AutoGuardKeybind='L'};e:Install(env,s);e:SetAutoPlay(true)
 world.Raycast=function()return nil end
 own.Character.ball=part(root.Position+v(0,0,-1));oh.AutoRotate=true
@@ -21,13 +26,12 @@ local camera={CameraSubject=oh,CFrame=frame(root.Position+v(12,8,0),root.Positio
 e.OpponentReads={{Position=root.Position+v(-10,0,0),Predicted=root.Position+v(-10,0,0)}}
 e.AutoMovePoint=root.Position+v(-8,0,8);local initialCamera=camera.CFrame
 e.OffenseGoal=goal
-e:UpdateAutoFacing(.05);assert(oh.AutoRotate==false and camera.CFrame~=initialCamera,'camera and body engage')
-local prevLook=root.CFrame.LookVector;assert(prevLook.Z>0 and prevLook.Z<.5,'body yaw eased, not snapped')
+local originalRootFrame=root.CFrame
+e:UpdateAutoFacing(.05);assert(oh.AutoRotate and lock.locked and camera.CFrame~=initialCamera,'native shift-lock and camera engage')
 for _=1,20 do e:UpdateAutoFacing(1/60) end
-assert((root.CFrame.Position-root.Position).Magnitude<.001,'no positional teleport')
-local want=e:DesiredFacing(root);local look=root.CFrame.LookVector
-assert(look.X*want.X+look.Z*want.Z>.97,'body converges on desired facing')
-assert(want.X<0 and want.Z>0,'facing blends drive direction with the basket')
+assert(root.CFrame==originalRootFrame,'script must not force root orientation')
+local want=e:DesiredFacing(root)
+assert(want.X<0 and want.Z>0,'facing blends drive direction with basket')
 local d0=(camera.CFrame.Position-root.Position).Magnitude
 for _=1,240 do e:UpdateAutoFacing(1/60) end
 local d1=(camera.CFrame.Position-root.Position).Magnitude
@@ -39,7 +43,7 @@ local before=camera.CFrame.Position;e.AutoMovePoint=root.Position+v(8,0,-8);e:Up
 assert((camera.CFrame.Position-before).Magnitude<1,'route flips do not jerk camera')
 input.GetMouseDelta=function()return {Magnitude=4}end;e:UpdateAutoFacing(.05)
 assert(oh.AutoRotate==true and not e.AutoFacingHumanoid,'mouse motion yields control')
-input.GetMouseDelta=function()return {Magnitude=0}end;e.Clock=1;e:UpdateAutoFacing(.05);assert(not oh.AutoRotate)
+input.GetMouseDelta=function()return {Magnitude=0}end;e.Clock=1;e:UpdateAutoFacing(.05);assert(oh.AutoRotate and lock.locked)
 e.Shooting=true;e:UpdateAutoFacing(.05);assert(oh.AutoRotate,'release for original shot camera');e.Shooting=false
 e:UpdateAutoFacing(.05);s.AutoPlayCamera=false;e:UpdateAutoFacing(.05);assert(oh.AutoRotate,'camera toggle off restores body')
 s.AutoPlayCamera=true;e:UpdateAutoFacing(.05);input.down.W=true;e:UpdateAutoFacing(.05);assert(oh.AutoRotate,'manual movement restores')

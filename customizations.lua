@@ -1,7 +1,7 @@
 -- Editable Ultimate preferences layered over the recovered Blessed program.
 local UltimatePreferences = {
     AutoGuardKey = "L", HideAimbotKeyPicker = true,
-    Aimbot = true, AutoGuard = true, BallCheck = true,
+    AimbotType = "Mixed arc", Aimbot = true, AutoGuard = true, BallCheck = true,
     MatchTargetJump = true, AutoPlay = false,
     BallMagnet = false, MagnetStrength = 50,
     BallReach = true, ReachStrength = 10,
@@ -54,6 +54,7 @@ local function applyUltimateDefaults(root)
     -- The original decoded data stays untouched on disk. These sites are the
     -- recovered initializer operations, applied before self-modification runs.
     assert(root[6][1972] == "X", "Unexpected aimbot initializer")
+    root[6][1974] = UltimatePreferences.AimbotType
     root[6][1969] = UltimatePreferences.Aimbot
     root[6][1972] = "Unknown" -- The initializer assignment itself is skipped.
     root[6][1978] = UltimatePreferences.AutoGuard

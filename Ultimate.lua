@@ -32,7 +32,7 @@ end
 -- Editable Ultimate preferences layered over the recovered Blessed program.
 local UltimatePreferences = {
     AutoGuardKey = "L", HideAimbotKeyPicker = true,
-    Aimbot = true, AutoGuard = true, BallCheck = true,
+    AimbotType = "Mixed arc", Aimbot = true, AutoGuard = true, BallCheck = true,
     MatchTargetJump = true, AutoPlay = false,
     BallMagnet = false, MagnetStrength = 50,
     BallReach = true, ReachStrength = 10,
@@ -85,6 +85,7 @@ local function applyUltimateDefaults(root)
     -- The original decoded data stays untouched on disk. These sites are the
     -- recovered initializer operations, applied before self-modification runs.
     assert(root[6][1972] == "X", "Unexpected aimbot initializer")
+    root[6][1974] = UltimatePreferences.AimbotType
     root[6][1969] = UltimatePreferences.Aimbot
     root[6][1972] = "Unknown" -- The initializer assignment itself is skipped.
     root[6][1978] = UltimatePreferences.AutoGuard
@@ -249,6 +250,7 @@ function Extension:SetAutoPlay(enabled)
         end
         self.AutoPlayStarted, self.State, self.StateSince = self.Clock, nil, self.Clock
         self.AutoPlayStatus = "Experimental: scanning"
+        if self.LockMatch then self:LockMatch() end
         self:Log("toggle", "Auto-play enabled (Auto Guard off)")
     else
         if self.ResetOffense then self:ResetOffense() end
@@ -274,7 +276,7 @@ function Extension:LooseBall(root)
 end
 function Extension:InShotRange(root)
     local high = self.Settings.AimbotType == "High"
-    local minimum, maximum = high and 57 or 58, high and 73 or 74
+    local minimum, maximum = high and 57 or 58, (high or self.Settings.AimbotType=="Mixed arc") and 73 or 74
     local goals = self.Goals and self:Goals() or self.Collection:GetTagged("FieldGoals")
     for _, goal in ipairs(goals) do
         if goal:IsA("BasePart") then
@@ -290,16 +292,7 @@ local function isTeammate(self, player)
 end
 -- Raw possession read: who holds the ball right now.
 function Extension:ReadPossession(character)
-    if heldBall(character) then return "Own", self.Player end
-    for _, player in ipairs(self:PlayerList()) do
-        if player ~= self.Player then
-            local other = player.Character
-            if other and other.Parent and heldBall(other) then
-                return isTeammate(self, player) and "Teammate" or "Opponent", player
-            end
-        end
-    end
-    return "Loose", nil
+    return self:SelectMatchHolder(character)
 end
 -- Explicit state with debouncing so brief reparenting during a dribble or a
 -- delayed replication does not flip offense/defense.
@@ -312,7 +305,7 @@ function Extension:UpdateState(character, humanoid, root)
         self.ResetUntil = now+0.6
         self:Log("reset", string.format("teleport %.0f studs (score/reset or respawn)", (root.Position-last).Magnitude))
     end
-    local busy = self.Shooting or (self.AimDepth or 0) > 0 or (self.DunkingUntil and now < self.DunkingUntil)
+    local busy = self.Shooting or (self.AimDepth or 0) > 0
     if self:IsManual() then state, reason = "Manual", tostring(self.ManualReason or "input")
     elseif self.ResetUntil and now < self.ResetUntil then state, reason = "Reset", "position reset"
     elseif busy then state, reason = "Shot", self.Shooting and "shot routine" or ((self.AimDepth or 0) > 0 and "aim routine" or "dunk")
@@ -436,17 +429,7 @@ function Extension:AutoPlayStep(character, humanoid, root)
         end
     else
         if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
-        local ball = self:LooseBall(root)
-        if ball then
-            local reads = self.ReadOpponents and self:ReadOpponents(root) or {}
-            local close = (ball.Position-root.Position).Magnitude < 6
-            self.AutoMovePoint = (not close and self.SteerTo) and (self:SteerTo(root, ball.Position, reads) or ball.Position) or ball.Position
-            self.AutoPlayStatus = self.AutoMovePoint and "Seeking loose ball" or "Pickup route blocked"
-        else
-            self:StopAutoMove(); self.AutoPlayStatus = "Scanning nearby balls"
-            local inGame = self.Player.GetAttribute and select(2, pcall(self.Player.GetAttribute, self.Player, "Ingame"))
-            self.StopReason = inGame == false and "not in game (waiting)" or "no ball in reach"
-        end
+        self:RecoveryStep(character,humanoid,root)
     end
 end
 function Extension:Tick(dt)
@@ -531,12 +514,17 @@ function Extension:StatusText()
     local character=self.Player and self.Player.Character
     local action=self.GameAction and self:GameAction(character)
     local manual=self.Clock<(self.ManualUntil or 0) and string.format("%s %.1fs", tostring(self.ManualReason), self.ManualUntil-now) or "none"
+    local _,_,root=characterParts(self.Player)
+    local moveDistance=root and self.AutoMovePoint and distance(root.Position,self.AutoMovePoint)
+    local moveContext=moveDistance and string.format(" | target %.1f studs away",moveDistance) or ""
     local lines={
         string.format("State %s for %.1fs | %s", tostring(self.State or "-"), now-(self.StateSince or now), self.LastTransition or "-"),
         "Holder "..name(self.Holder).." | jump target "..name(self.Target),
+        "Court "..self:GoalLabel(self.MatchGoal).." | opponent "..name(self.MatchOpponent),
+        "Context "..tostring(self.ContextReason or "-").." | "..tostring(self.CameraControlStatus or "camera idle"),
         "Basket "..tostring((self.State=="Opponent" and self.DefenseGoal or self.OffenseGoal) and (self.State=="Opponent" and self.DefenseGoal or self.OffenseGoal).Name or "-")
             .." | intent "..tostring(self.State=="Opponent" and self.DefenseIntent or self.AutoPlayStatus),
-        "Stopped: "..tostring(self.AutoMovePoint and "moving" or (self.StopReason or "-")).." | manual "..manual,
+        "Stopped: "..tostring(self.AutoMovePoint and "moving" or (self.StopReason or "-")).." | manual "..manual..moveContext,
         "Action "..tostring(action).." | shooting "..tostring(self.Shooting==true).." aim "..tostring(self.AimDepth or 0)
             .." dunking "..tostring(self.DunkingUntil~=nil and now<self.DunkingUntil),
         (self.LastShotResult or "No shot yet").." / "..tostring(self.ShotBlockReason or "-"),
@@ -667,6 +655,13 @@ function Extension:InstallControls(section)
         self.Settings.AutoPlayBasket = value
         if self.ResetOffense then self:ResetOffense() end
     end})
+    local names={"Auto (this court)"}
+    for _,player in ipairs(self:PlayerList()) do if player~=self.Player then names[#names+1]=player.Name end end
+    section:NewDropdown({Title="Opponent",Data=names,Default="Auto (this court)",Callback=function(value)
+        self.Settings.AutoPlayOpponent=value;self.MatchOpponent=nil
+    end})
+    section:NewButton({Title="Lock court here",Callback=function() self:LockMatch() end})
+    section:NewButton({Title="Lock viewed hoop",Callback=function() self:LockViewedHoop() end})
     section:NewToggle({Title = "Player collisions", Default = false, Callback = function(value)
         self:SetPlayerCollisions(value)
     end})
@@ -746,7 +741,39 @@ function Extension:Destroy()
     if self.Run and self.RenderName then self.Run:UnbindFromRenderStep(self.RenderName) end
 end
 customizeClosure = function(name, original, environment, captures)
-    if name == "root.2169" then
+    if name == "root.1083.232.12.644" then
+        return function(section, config, ...)
+            if type(config)=="table" and config.Title=="Type" and type(config.Data)=="table" then
+                local low,high=false,false
+                for _,value in ipairs(config.Data) do low=low or value=="Low";high=high or value=="High" end
+                if low and high then config.Data={"Low","Mixed arc","High"} end
+            end
+            return original(section,config,...)
+        end
+    elseif name == "root.175" then
+        return function(...)
+            local settings=captures[0]
+            if not settings or settings.AimbotType~="Mixed arc" then return original(...) end
+            local player=environment.game.Players.LocalPlayer
+            local previousPower=player:GetAttribute("Power")
+            local args=table.pack(...)
+            local ok,result,power=pcall(function()
+                settings.AimbotType="Low"
+                local low=original(table.unpack(args,1,args.n))
+                local lowPower=player:GetAttribute("Power")
+                settings.AimbotType="High"
+                local high=original(table.unpack(args,1,args.n))
+                local highPower=player:GetAttribute("Power")
+                assert(type(low)=="number" and type(high)=="number","Arc endpoint unavailable")
+                local midPower=type(lowPower)=="number" and type(highPower)=="number" and (lowPower+highPower)/2 or previousPower
+                return (low+high)/2,midPower
+            end)
+            settings.AimbotType="Mixed arc"
+            player:SetAttribute("Power",ok and power or previousPower)
+            if not ok then error(result,0) end
+            return result
+        end
+    elseif name == "root.2169" then
         Extension.InputCaptures = captures
         return function(input, processed) return Extension:GuardKey(input, processed, captures) end
     elseif name == "root.2115" then
@@ -1033,7 +1060,7 @@ function Extension:ReadOpponents(root)
     for _, player in ipairs(self:PlayerList()) do
         local sameTeam = self.Player.Team and player.Team == self.Player.Team
             and self.Player.Neutral == false and player.Neutral == false
-        if player ~= self.Player and not sameTeam then
+        if player ~= self.Player and not sameTeam and (not self.MatchGoal or self:MatchPlayer(player)) then
             local character, humanoid, other = characterParts(player)
             if character and math.abs(other.Position.Y-root.Position.Y) < 12
                 and flat(other.Position-root.Position).Magnitude < 90 then
@@ -1132,7 +1159,7 @@ function Extension:CanTakeShot(root)
     return true
 end
 function Extension:ShotRadius(root, goal)
-    local radius3d = self.Settings.AimbotType == "High" and 64 or 65
+    local radius3d = self.Settings.AimbotType == "High" and 64 or (self.Settings.AimbotType=="Mixed arc" and 64.5 or 65)
     local dy = goal.Position.Y-root.Position.Y
     return math.sqrt(math.max(1,radius3d*radius3d-dy*dy))
 end
@@ -1229,12 +1256,41 @@ function Extension:ReleaseAutoFacing()
     local humanoid=self.AutoFacingHumanoid
     if humanoid then
         pcall(function()
-            if humanoid.AutoRotate==false then humanoid.AutoRotate=self.SavedAutoRotate end
+            if humanoid.AutoRotate==true then humanoid.AutoRotate=self.SavedAutoRotate end
         end)
     end
+    local controller=self.OwnedMouseLock
+    self.OwnedMouseLock=nil
+    if controller then pcall(function()
+        if controller:GetIsMouseLocked() then controller:OnMouseLockToggled() end
+    end) end
     self.AutoFacingHumanoid,self.SavedAutoRotate=nil,nil
     self.FaceYaw,self.CameraYaw,self.CameraDistance,self.CameraCurrentDistance=nil,nil,nil,nil
     self.CameraPitch,self.CameraFirstPerson=nil,nil
+end
+-- Use Roblox's camera controller to rotate the body in shift-lock. Never
+-- assign HumanoidRootPart.CFrame: that fights the native movement controller.
+function Extension:AcquireMouseLock()
+    if self.MouseLockUnavailable and self.Clock<self.MouseLockUnavailable then return false end
+    local ok,controller=pcall(function()
+        local scripts=self.Player.PlayerScripts or self.Player:FindFirstChild("PlayerScripts")
+        local module=scripts and scripts:FindFirstChild("PlayerModule")
+        local loader=self.Environment.require or require
+        local playerModule=module and loader(module)
+        local cameras=playerModule and playerModule:GetCameras()
+        return cameras and cameras.activeMouseLockController
+    end)
+    if not ok or not controller or type(controller.GetIsMouseLocked)~="function"
+        or type(controller.OnMouseLockToggled)~="function" then
+        self.MouseLockUnavailable=self.Clock+3
+        self.CameraControlStatus="Enable native shift-lock manually (controller unavailable)"
+        return false
+    end
+    local success=pcall(function()
+        if not controller:GetIsMouseLocked() then controller:OnMouseLockToggled();self.OwnedMouseLock=controller end
+    end)
+    self.CameraControlStatus=success and "Native shift-lock: camera drives body" or "Native shift-lock unavailable"
+    return success
 end
 -- A camera hit only counts as a wall when it is real, visible, anchored
 -- geometry: not the dribbled ball, hitboxes, effects or invisible barriers.
@@ -1321,10 +1377,11 @@ function Extension:UpdateAutoFacing(dt)
         local look=root.CFrame and root.CFrame.LookVector
         if look and flat(look).Magnitude>0.1 then self.FaceYaw=yawOf(look) end
     end
-    humanoid.AutoRotate=false
+    humanoid.AutoRotate=true
+    self:AcquireMouseLock()
     self.FaceYaw=approachYaw(self.FaceYaw,yawOf(face),12,9,dt)
     local bodyDir=env.Vector3.new(math.sin(self.FaceYaw),0,math.cos(self.FaceYaw))
-    root.CFrame=env.CFrame.lookAt(root.Position,root.Position+bodyDir)
+    -- Native shift-lock aligns the character with camera yaw.
     if not camera or camera.CameraSubject~=humanoid then self.CameraYaw,self.CameraDistance=nil,nil;return end
     -- Camera orbits the same focus Roblox uses, at YOUR current zoom radius,
     -- so handing control back to the default camera never jumps.
@@ -1348,9 +1405,9 @@ function Extension:UpdateAutoFacing(dt)
         local goal=self.OffenseGoal
         local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
         viewDir=bodyDir
-        if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(toGoal) end
+        if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(bodyDir*0.65+unit(toGoal)*0.35) end
     end
-    self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),3,2.6,dt)
+    self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),defending and 7 or 3,defending and 7 or 2.6,dt)
     -- Ease pitch into a court-reading band, never into the floor or overhead.
     local wantPitch=math.max(0.28,math.min(0.6,self.CameraPitch or 0.36))
     self.CameraPitch=(self.CameraPitch or wantPitch)+(wantPitch-(self.CameraPitch or wantPitch))*(1-math.exp(-2*math.min(dt,0.1)))
@@ -1487,11 +1544,11 @@ end
 function Extension:TryDunk(root, goal)
     local reach=flat(goal.Position-root.Position).Magnitude
     if reach>(self.DunkReach or 9) then return false end
-    if not self:PulseKey("T",0.25,1.2,true) then return false end
+    if not self:PulseKey("T",0.65,1.2,true) then return false end
     self.DunkAttempts=(self.DunkAttempts or 0)+1
     self.LastShotResult="Dunk key T sent at "..string.format("%.1f",reach).." studs"
     self.AutoPlayStatus="Dunking"
-    self.DunkingUntil=self.Clock+0.9
+    self.DunkingUntil=nil -- Input is not proof the server started a dunk.
     if self.StartShotTrack then self:StartShotTrack("Dunk", self.Player.Character, goal, reach) end
     return true
 end
@@ -1513,13 +1570,13 @@ function Extension:OffenseStep(character, humanoid, root)
             self.FreezeLogged = true; action = nil
         end
     else self.FreezeSince, self.FreezeLogged = nil, nil end
-    if action == "Shooting" or action == "Dunking" or (self.DunkingUntil and now < self.DunkingUntil) then
+    if action == "Shooting" or action == "Dunking" then
         self:StopAutoMove();self:ReleaseDribbleKeys(true)
         self.AutoPlayStatus = "Game action in progress: "..tostring(action or "dunk")
         return false
     end
     if not self.OffenseGoal or not self.OffenseGoal.Parent then
-        self.OffenseGoal = self:NearestGoal(root,self.Settings.AutoPlayBasket)
+        self.OffenseGoal = self.MatchGoal or self:NearestGoal(root,self.Settings.AutoPlayBasket)
         if not self.OffenseGoal then self:StopAutoMove();self.AutoPlayStatus="No nearby attack basket";return false end
         self.GoalDirection = unit(flat(root.Position-self.OffenseGoal.Position))
     end
@@ -1549,7 +1606,7 @@ function Extension:OffenseStep(character, humanoid, root)
     else self.DunkMode=false end
     if self.DunkMode then
         self.OpenSince,self.SettlePosition,self.SettleSince=nil,nil,nil
-        if grounded and self:TryDunk(root,goal) then self:StopAutoMove();return false end
+        if grounded then self:TryDunk(root,goal) end
         local approach = unit(flat(root.Position-goal.Position))
         local rim=goal.Position+approach*2.5
         rim=self.Environment.Vector3.new(rim.X,root.Position.Y,rim.Z)
@@ -1645,7 +1702,7 @@ end
 ---------------------------------------------------------------------------
 function Extension:StartShotTrack(kind, character, goal, reach)
     self.ShotTrack = {Kind=kind, Character=character, Goal=goal, Start=self.Clock, Reach=reach,
-        Released=false, MinDistance=math.huge}
+        Released=false, MinDistance=math.huge, Ball=self.PossessionBall}
 end
 function Extension:FinishShotTrack(text)
     local track = self.ShotTrack
@@ -1692,11 +1749,12 @@ function Extension:TrackShot()
         if self.Clock-track.LeftAt < 0.15 then return end
         track.Released, track.ReleaseTime = true, self.Clock
         -- Bind to one ball: the loose ball nearest to us at release.
-        local best, bestDistance
+        local best, bestDistance = track.Ball, nil
         for part in pairs(self:BallSet()) do
-            if part.Parent and not self:BallOwner(part) and root then
+            if not track.Ball and part.Parent and not self:BallOwner(part) and root
+                and (not self.MatchGoal or self:MatchPosition(part.Position)) then
                 local d = (part.Position-root.Position).Magnitude
-                if not bestDistance or d < bestDistance then best, bestDistance = part, d end
+                if d<40 and (not bestDistance or d < bestDistance) then best, bestDistance = part, d end
             end
         end
         track.Ball = best
@@ -1724,6 +1782,149 @@ function Extension:TrackShot()
     end
 end
 
+-- Keep all decisions on one local court. Never acquire a server-wide holder
+-- first and then let that stranger choose the defended basket.
+local function attribute(object,key)
+    if object and type(object.GetAttribute)=="function" then
+        local ok,value=pcall(object.GetAttribute,object,key)
+        if ok and (type(value)=="string" or type(value)=="number" or type(value)=="boolean") then return value end
+    end
+end
+local function mflat(v)return Extension.Environment.Vector3.new(v.X,0,v.Z)end
+function Extension:GoalLabel(goal)
+    if not goal then return "unlocked" end
+    local path=goal.Name or "Goal"
+    if type(goal.GetFullName)=="function" then local ok,v=pcall(goal.GetFullName,goal);if ok then path=v end end
+    local p=goal.Position
+    return path..string.format(" [%.0f,%.0f,%.0f]",p.X,p.Y,p.Z)
+end
+function Extension:LockMatch(goal)
+    local _,_,root=characterParts(self.Player)
+    if not root then return end
+    goal=goal or self:NearestGoal(root,self.Settings.AutoPlayBasket)
+    self.MatchGoal,self.MatchChoice=goal,self.Settings.AutoPlayBasket
+    self.MatchOpponent=nil
+    self.MatchAnchor=root.Position
+    self.ContextReason=goal and "court locked at local player" or "no local basket"
+    self.DefenseGoal,self.LastDefenseTarget,self.Holder=nil,nil,nil
+    self.RecoveryBall,self.RecoveryUntil=nil,nil
+    if self.ResetOffense then self:ResetOffense() end
+    self:StopAutoMove()
+    self.State,self.PendingState=nil,nil
+    self:Log("match",self.ContextReason..": "..self:GoalLabel(goal))
+end
+function Extension:EnsureMatch()
+    if self.MatchChoice~=self.Settings.AutoPlayBasket or (not self.MatchGoal or not self.MatchGoal.Parent)
+        and self.Clock>=(self.NextContextLock or -100) then
+        self.NextContextLock=self.Clock+1;self:LockMatch()
+    end
+    return self.MatchGoal
+end
+function Extension:MatchPosition(position)
+    local goal=self.MatchGoal
+    if not goal then return true end -- legacy isolated unit fixtures only
+    if math.abs(position.Y-goal.Position.Y)>45 or mflat(position-goal.Position).Magnitude>125 then return false end
+    -- Voronoi boundary prevents crossing into an adjacent half court. A small
+    -- margin admits bodies/balls on the shared painted boundary.
+    local d=mflat(position-goal.Position).Magnitude
+    for _,other in ipairs(self:Goals())do
+        if other~=goal and other.Parent and math.abs(other.Position.Y-goal.Position.Y)<15
+            and mflat(position-other.Position).Magnitude+8<d then return false end
+    end
+    return true
+end
+function Extension:MatchPlayer(player)
+    local _,_,root=characterParts(player)
+    if not root or not self:MatchPosition(root.Position) then return false end
+    if attribute(self.Player,"Ingame")==true and attribute(player,"Ingame")==false then return false end
+    for _,key in ipairs({"Court","CourtId","CourtID","MatchId","MatchID","GameId"})do
+        local ours=attribute(self.Player,key) or attribute(self.Player.Character,key)
+        local theirs=attribute(player,key) or attribute(player.Character,key)
+        if ours~=nil and theirs~=nil and ours~=theirs then return false end
+    end
+    local selected=self.Settings.AutoPlayOpponent
+    if selected and selected~="Auto (this court)" and player~=self.Player then return player.Name==selected end
+    return true
+end
+function Extension:SelectMatchHolder(character)
+    self:EnsureMatch()
+    local own=heldBall(character)
+    if own then
+        local ok,part=pcall(function() return own:IsA("BasePart") and own or own:FindFirstChild("Ball") end)
+        if ok then self.PossessionBall=part end
+        return "Own",self.Player
+    end
+    local _,_,root=characterParts(self.Player)
+    if not root then return "Loose",nil end
+    if not self.MatchGoal or not self.MatchGoal.Parent then self.ContextReason="No court locked: use Lock viewed hoop";return "Loose",nil end
+    local candidates={}
+    for _,player in ipairs(self:PlayerList())do
+        if player~=self.Player and self:MatchPlayer(player) and heldBall(player.Character) then
+            local teammate=self.Player.Team~=nil and player.Team==self.Player.Team
+                and self.Player.Neutral==false and player.Neutral==false
+            local _,_,other=characterParts(player)
+            candidates[#candidates+1]={Player=player,Kind=teammate and "Teammate" or "Opponent",Distance=(root.Position-other.Position).Magnitude}
+        end
+    end
+    for _,c in ipairs(candidates)do if c.Player==self.MatchOpponent then return c.Kind,c.Player end end
+    -- Once the opponent is known, do not replace them with another server
+    -- player holding a different ball during a release or dribble.
+    if self.MatchOpponent and self:MatchPlayer(self.MatchOpponent) then return "Loose",nil end
+    table.sort(candidates,function(a,b)return a.Distance<b.Distance end)
+    local first=candidates[1]
+    if first and candidates[2] and candidates[2].Distance-first.Distance<10 then
+        self.ContextReason="multiple holders on court: select Opponent";return "Loose",nil
+    end
+    if first then
+        if first.Kind=="Opponent" then
+            self.MatchOpponent=first.Player
+            self:Log("match","opponent locked "..first.Player.Name.." | "..self:GoalLabel(self.MatchGoal))
+        end
+        return first.Kind,first.Player
+    end
+    return "Loose",nil
+end
+function Extension:LockViewedHoop()
+    local camera=self.Environment.workspace.CurrentCamera
+    if not camera then return end
+    local best,score=nil,-1
+    for _,goal in ipairs(self:Goals())do
+        local delta=goal.Position-camera.CFrame.Position
+        if delta.Magnitude<170 and delta.Magnitude>1 then
+            local alignment=delta.Unit:Dot(camera.CFrame.LookVector)
+            if alignment>0.85 and alignment>score then best,score=goal,alignment end
+        end
+    end
+    if best then self:LockMatch(best) else self.ContextReason="Look toward the intended rim, then lock again";self:Log("match",self.ContextReason) end
+end
+function Extension:RecoveryStep(character,humanoid,root)
+    local preferred=self.RecoveryBall or (self.ShotTrack and self.ShotTrack.Ball)
+    local ball,best=nil,85
+    for candidate in pairs(self:BallSet())do
+        if candidate.Parent and not self:BallOwner(candidate) and self:MatchPosition(candidate.Position) then
+            local d=(candidate.Position-root.Position).Magnitude
+            if candidate==preferred and d<85 then ball=candidate;break end
+            if d<best then ball,best=candidate,d end
+        end
+    end
+    if not ball then self:StopAutoMove();self.StopReason="no loose ball on locked court";self.AutoPlayStatus="Watching court for rebound";return end
+    local velocity=ball.AssemblyLinearVelocity or self.Environment.Vector3.new()
+    local gravity=self.Environment.workspace.Gravity or 196.2
+    local height=math.max(0,ball.Position.Y-root.Position.Y)
+    local t=math.min(1.2,math.max(0,(velocity.Y+math.sqrt(velocity.Y*velocity.Y+2*gravity*height))/gravity))
+    local lead=mflat(velocity)*math.min(t,0.9)
+    if lead.Magnitude>25 then lead=lead.Unit*25 end
+    local point=self.Environment.Vector3.new(ball.Position.X,root.Position.Y,ball.Position.Z)+lead
+    if not self:MatchPosition(point) then point=self.Environment.Vector3.new(ball.Position.X,root.Position.Y,ball.Position.Z) end
+    local params=self:MakeRayParams()
+    if not self:HasFloor(point,params) then self:StopAutoMove();self.StopReason="rebound landing point unsupported";return end
+    local target=self:SteerTo(root,point,self:ReadOpponents(root))
+    self.AutoMovePoint=target
+    self.RecoveryTarget,self.RecoveryBall=point,ball
+    self.AutoPlayStatus=height>5 and "Rebounding: predicting landing" or "Recovering loose ball"
+    self.StopReason=target and nil or "at recovery point"
+end
+
 -- Basket-aware defense for Auto-play. Hoopz half-court play attacks one hoop;
 -- the defended basket is the goal on the attacker's court (nearest to the
 -- attacker, kept for the possession), never simply the hoop nearest to us.
@@ -1739,6 +1940,10 @@ local function dsegment(point, a, b)
     return dflat(point-(a+d*t)).Magnitude
 end
 function Extension:DefendedGoal(attackerRoot)
+    if self.MatchGoal and self.MatchGoal.Parent then
+        self.DefenseGoal=self.MatchGoal
+        return self.MatchGoal
+    end
     local current = self.DefenseGoal
     local best, bestDistance
     for _, goal in ipairs(self:Goals()) do

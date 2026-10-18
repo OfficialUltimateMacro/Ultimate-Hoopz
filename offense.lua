@@ -229,7 +229,7 @@ function Extension:ReadOpponents(root)
     for _, player in ipairs(self:PlayerList()) do
         local sameTeam = self.Player.Team and player.Team == self.Player.Team
             and self.Player.Neutral == false and player.Neutral == false
-        if player ~= self.Player and not sameTeam then
+        if player ~= self.Player and not sameTeam and (not self.MatchGoal or self:MatchPlayer(player)) then
             local character, humanoid, other = characterParts(player)
             if character and math.abs(other.Position.Y-root.Position.Y) < 12
                 and flat(other.Position-root.Position).Magnitude < 90 then
@@ -328,7 +328,7 @@ function Extension:CanTakeShot(root)
     return true
 end
 function Extension:ShotRadius(root, goal)
-    local radius3d = self.Settings.AimbotType == "High" and 64 or 65
+    local radius3d = self.Settings.AimbotType == "High" and 64 or (self.Settings.AimbotType=="Mixed arc" and 64.5 or 65)
     local dy = goal.Position.Y-root.Position.Y
     return math.sqrt(math.max(1,radius3d*radius3d-dy*dy))
 end
@@ -425,12 +425,41 @@ function Extension:ReleaseAutoFacing()
     local humanoid=self.AutoFacingHumanoid
     if humanoid then
         pcall(function()
-            if humanoid.AutoRotate==false then humanoid.AutoRotate=self.SavedAutoRotate end
+            if humanoid.AutoRotate==true then humanoid.AutoRotate=self.SavedAutoRotate end
         end)
     end
+    local controller=self.OwnedMouseLock
+    self.OwnedMouseLock=nil
+    if controller then pcall(function()
+        if controller:GetIsMouseLocked() then controller:OnMouseLockToggled() end
+    end) end
     self.AutoFacingHumanoid,self.SavedAutoRotate=nil,nil
     self.FaceYaw,self.CameraYaw,self.CameraDistance,self.CameraCurrentDistance=nil,nil,nil,nil
     self.CameraPitch,self.CameraFirstPerson=nil,nil
+end
+-- Use Roblox's camera controller to rotate the body in shift-lock. Never
+-- assign HumanoidRootPart.CFrame: that fights the native movement controller.
+function Extension:AcquireMouseLock()
+    if self.MouseLockUnavailable and self.Clock<self.MouseLockUnavailable then return false end
+    local ok,controller=pcall(function()
+        local scripts=self.Player.PlayerScripts or self.Player:FindFirstChild("PlayerScripts")
+        local module=scripts and scripts:FindFirstChild("PlayerModule")
+        local loader=self.Environment.require or require
+        local playerModule=module and loader(module)
+        local cameras=playerModule and playerModule:GetCameras()
+        return cameras and cameras.activeMouseLockController
+    end)
+    if not ok or not controller or type(controller.GetIsMouseLocked)~="function"
+        or type(controller.OnMouseLockToggled)~="function" then
+        self.MouseLockUnavailable=self.Clock+3
+        self.CameraControlStatus="Enable native shift-lock manually (controller unavailable)"
+        return false
+    end
+    local success=pcall(function()
+        if not controller:GetIsMouseLocked() then controller:OnMouseLockToggled();self.OwnedMouseLock=controller end
+    end)
+    self.CameraControlStatus=success and "Native shift-lock: camera drives body" or "Native shift-lock unavailable"
+    return success
 end
 -- A camera hit only counts as a wall when it is real, visible, anchored
 -- geometry: not the dribbled ball, hitboxes, effects or invisible barriers.
@@ -517,10 +546,11 @@ function Extension:UpdateAutoFacing(dt)
         local look=root.CFrame and root.CFrame.LookVector
         if look and flat(look).Magnitude>0.1 then self.FaceYaw=yawOf(look) end
     end
-    humanoid.AutoRotate=false
+    humanoid.AutoRotate=true
+    self:AcquireMouseLock()
     self.FaceYaw=approachYaw(self.FaceYaw,yawOf(face),12,9,dt)
     local bodyDir=env.Vector3.new(math.sin(self.FaceYaw),0,math.cos(self.FaceYaw))
-    root.CFrame=env.CFrame.lookAt(root.Position,root.Position+bodyDir)
+    -- Native shift-lock aligns the character with camera yaw.
     if not camera or camera.CameraSubject~=humanoid then self.CameraYaw,self.CameraDistance=nil,nil;return end
     -- Camera orbits the same focus Roblox uses, at YOUR current zoom radius,
     -- so handing control back to the default camera never jumps.
@@ -544,9 +574,9 @@ function Extension:UpdateAutoFacing(dt)
         local goal=self.OffenseGoal
         local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
         viewDir=bodyDir
-        if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(toGoal) end
+        if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(bodyDir*0.65+unit(toGoal)*0.35) end
     end
-    self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),3,2.6,dt)
+    self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),defending and 7 or 3,defending and 7 or 2.6,dt)
     -- Ease pitch into a court-reading band, never into the floor or overhead.
     local wantPitch=math.max(0.28,math.min(0.6,self.CameraPitch or 0.36))
     self.CameraPitch=(self.CameraPitch or wantPitch)+(wantPitch-(self.CameraPitch or wantPitch))*(1-math.exp(-2*math.min(dt,0.1)))
@@ -683,11 +713,11 @@ end
 function Extension:TryDunk(root, goal)
     local reach=flat(goal.Position-root.Position).Magnitude
     if reach>(self.DunkReach or 9) then return false end
-    if not self:PulseKey("T",0.25,1.2,true) then return false end
+    if not self:PulseKey("T",0.65,1.2,true) then return false end
     self.DunkAttempts=(self.DunkAttempts or 0)+1
     self.LastShotResult="Dunk key T sent at "..string.format("%.1f",reach).." studs"
     self.AutoPlayStatus="Dunking"
-    self.DunkingUntil=self.Clock+0.9
+    self.DunkingUntil=nil -- Input is not proof the server started a dunk.
     if self.StartShotTrack then self:StartShotTrack("Dunk", self.Player.Character, goal, reach) end
     return true
 end
@@ -709,13 +739,13 @@ function Extension:OffenseStep(character, humanoid, root)
             self.FreezeLogged = true; action = nil
         end
     else self.FreezeSince, self.FreezeLogged = nil, nil end
-    if action == "Shooting" or action == "Dunking" or (self.DunkingUntil and now < self.DunkingUntil) then
+    if action == "Shooting" or action == "Dunking" then
         self:StopAutoMove();self:ReleaseDribbleKeys(true)
         self.AutoPlayStatus = "Game action in progress: "..tostring(action or "dunk")
         return false
     end
     if not self.OffenseGoal or not self.OffenseGoal.Parent then
-        self.OffenseGoal = self:NearestGoal(root,self.Settings.AutoPlayBasket)
+        self.OffenseGoal = self.MatchGoal or self:NearestGoal(root,self.Settings.AutoPlayBasket)
         if not self.OffenseGoal then self:StopAutoMove();self.AutoPlayStatus="No nearby attack basket";return false end
         self.GoalDirection = unit(flat(root.Position-self.OffenseGoal.Position))
     end
@@ -745,7 +775,7 @@ function Extension:OffenseStep(character, humanoid, root)
     else self.DunkMode=false end
     if self.DunkMode then
         self.OpenSince,self.SettlePosition,self.SettleSince=nil,nil,nil
-        if grounded and self:TryDunk(root,goal) then self:StopAutoMove();return false end
+        if grounded then self:TryDunk(root,goal) end
         local approach = unit(flat(root.Position-goal.Position))
         local rim=goal.Position+approach*2.5
         rim=self.Environment.Vector3.new(rim.X,root.Position.Y,rim.Z)
@@ -841,7 +871,7 @@ end
 ---------------------------------------------------------------------------
 function Extension:StartShotTrack(kind, character, goal, reach)
     self.ShotTrack = {Kind=kind, Character=character, Goal=goal, Start=self.Clock, Reach=reach,
-        Released=false, MinDistance=math.huge}
+        Released=false, MinDistance=math.huge, Ball=self.PossessionBall}
 end
 function Extension:FinishShotTrack(text)
     local track = self.ShotTrack
@@ -888,11 +918,12 @@ function Extension:TrackShot()
         if self.Clock-track.LeftAt < 0.15 then return end
         track.Released, track.ReleaseTime = true, self.Clock
         -- Bind to one ball: the loose ball nearest to us at release.
-        local best, bestDistance
+        local best, bestDistance = track.Ball, nil
         for part in pairs(self:BallSet()) do
-            if part.Parent and not self:BallOwner(part) and root then
+            if not track.Ball and part.Parent and not self:BallOwner(part) and root
+                and (not self.MatchGoal or self:MatchPosition(part.Position)) then
                 local d = (part.Position-root.Position).Magnitude
-                if not bestDistance or d < bestDistance then best, bestDistance = part, d end
+                if d<40 and (not bestDistance or d < bestDistance) then best, bestDistance = part, d end
             end
         end
         track.Ball = best
