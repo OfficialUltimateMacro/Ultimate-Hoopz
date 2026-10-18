@@ -25,6 +25,7 @@ The recovered UI, supported-game branches and limits are retained, with the inpu
 - Ball Magnet enabled at **50**; Ball Reach enabled at **10**.
 - Hoopz WalkSpeed **0.01**, the recovered slider maximum; Anti Drop enabled.
 - Ultimate wordmark used for the header and floating icon.
+- **Player collisions (Experimental)** defaults OFF in the Guard controls. It attempts local torso contact by enabling CanCollide and using the Default collision group on your torso and nearby living players' torsos within 20 studs. It leaves roots, limbs, accessories, velocities, ownership and server collision rules alone. Settings restore when disabled, when players leave range, on death/respawn and on unload. Replication, constraints or server physics may prevent pushing; actual movement of another player is not guaranteed. This is a local contact experiment, not a verified push feature.
 
 The PNG is hosted in `assets/ultimate-wordmark.png`. When `getcustomasset`/`getsynasset` and `writefile` are available, the script downloads and caches it as `Ultimate-wordmark-061784a8.png` in the executor workspace. Downloads must have a PNG signature. If custom assets are unavailable, a pink Ultimate text wordmark is shown. The original Blessed logo is not used as a fallback.
 
@@ -39,6 +40,7 @@ The original optional spoofing controls remain. Readable additions are in `exten
 - The extended mocked Hoopz route completed initialization, verified actual initialized settings and maximum slider values, and confirmed that only the guard keybind picker remains.
 - Native extension regression checks cover guard-only L/notification and processed/typing input; target identity, switching, possession, cooldown and respawn; settings-table replacement; Auto-play enable/restore, manual pause, loose-ball ownership, shot range/cooldown, death and cleanup.
 - Offense simulation covers possession movement and arrival at a calibrated shooting position, defender prediction/filtering and contest gates, wall/ledge steering, all seven mapped dribble keys, cooldown/release, manual input, guard-key conflicts, queued-shot cancellation, blocked routes and cleanup.
+- Collision regression checks cover default-off, nearby torso-only changes, range/death/respawn/disable/unload restoration, current server baselines and preserving externally changed values.
 - Logo checks cover one shared download/cache for both icon locations, custom-asset failure fallback, and ordinary property assignments.
 
 Startup mocks do not run original scheduled gameplay tasks. Native offense tests separately execute simulated movement and deferred shot/input callbacks. These checks do not verify live rendering, server acceptance, complete map navigation, anti-cheat behavior or live Hoopz gameplay. No live Hoopz test was performed. Portable native tests and prerequisites are in `tests/README.md`.

@@ -5,3 +5,5 @@ Run `python tests/test_ultimate_offense.py`, `python tests/test_ultimate_extensi
 The offense suite simulates a flat world, obstacles, a ledge, replicated player motion, and deferred input/shot callbacks. It covers routing to a shot and arriving, close/jumping defender gates, friendly/remote-player filters, conservative rays, F/G/H/V/B/R/C choices, key release/cooldown, user-input/guard-key conflicts, and cancelling a queued shot. These are offline regressions, not proof of live game success or full-map navigation. The original guard regression isolates the prior planner; offense is tested separately.
 
 The workspace also contains work/test_ultimate_preferences.py for full recovered Hoopz startup using the isolated original interpreter fixture. That test and its historical decoder dependencies are not copied here.
+
+Run `python tests/test_player_collisions.py` for nearby torso-only contact changes, radius/death/respawn/disable/unload restoration and external-value preservation. This mock checks properties and cleanup, not actual physics or server-approved player pushing.

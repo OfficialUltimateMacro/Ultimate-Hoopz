@@ -296,6 +296,7 @@ function Extension:Tick(dt)
     self.TickAccumulator = (self.TickAccumulator or 0) + dt
     if self.TickAccumulator < 0.1 then return end
     self.TickAccumulator = 0
+    if self.Settings.PlayerCollisions and self.UpdatePlayerCollisions then self:UpdatePlayerCollisions() end
     local character, humanoid, root = characterParts(self.Player)
     if not humanoid then
         if self.ResetOffense then self:ResetOffense() end
@@ -316,6 +317,7 @@ function Extension:Install(environment, settings)
         settings.AutoPlay = false
         settings.AutoPlayDribble = true
         settings.AutoPlayBasket = "Nearest"
+        settings.PlayerCollisions = false
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -329,6 +331,7 @@ function Extension:Install(environment, settings)
     settings.AutoPlay = false
     settings.AutoPlayDribble = true
     settings.AutoPlayBasket = "Nearest"
+    settings.PlayerCollisions = false
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -361,6 +364,64 @@ function Extension:InstallControls(section)
         self.Settings.AutoPlayBasket = value
         if self.ResetOffense then self:ResetOffense() end
     end})
+    section:NewToggle({Title = "Player collisions (Experimental)", Default = false, Callback = function(value)
+        self:SetPlayerCollisions(value)
+    end})
+end
+-- Local torso contact only. No impulses, velocity changes, or ownership calls.
+function Extension:RestoreCollisionPart(part, record)
+    for key, saved in pairs(record) do
+        pcall(function()
+            if part[key] == saved.Applied then part[key] = saved.Original end
+        end)
+    end
+end
+function Extension:ClearPlayerCollisions()
+    for part, record in pairs(self.CollisionParts or {}) do self:RestoreCollisionPart(part, record) end
+    self.CollisionParts = {}
+end
+function Extension:SetPlayerCollisions(enabled)
+    if not self.Settings then return end
+    self.Settings.PlayerCollisions = enabled == true and self.Alive
+    if self.Settings.PlayerCollisions then
+        self:UpdatePlayerCollisions()
+    else self:ClearPlayerCollisions();self.CollisionStatus = "Off" end
+end
+function Extension:UpdatePlayerCollisions()
+    if not self.Alive or not self.Settings.PlayerCollisions then self:ClearPlayerCollisions();return end
+    local character, _, root = characterParts(self.Player)
+    local wanted = {}
+    if character then
+        for _, player in ipairs(self.Players:GetPlayers()) do
+            local other, _, otherRoot = characterParts(player)
+            if other and (player == self.Player or distance(root.Position,otherRoot.Position) <= 20) then
+                for _, name in ipairs({"Torso", "UpperTorso", "LowerTorso"}) do
+                    local part = other:FindFirstChild(name)
+                    if part and part:IsA("BasePart") and not part.Anchored then wanted[part] = true end
+                end
+            end
+        end
+    end
+    self.CollisionParts = self.CollisionParts or {}
+    for part, record in pairs(self.CollisionParts) do
+        if not wanted[part] then self:RestoreCollisionPart(part,record);self.CollisionParts[part] = nil end
+    end
+    local applied, failed = 0, false
+    for part in pairs(wanted) do
+        local record = self.CollisionParts[part] or {}
+        self.CollisionParts[part] = record
+        for key, value in pairs({CanCollide=true, CollisionGroup="Default"}) do
+            local ok = pcall(function()
+                local current = part[key]
+                if not record[key] then record[key] = {Original=current,Applied=value}
+                elseif current ~= value then record[key].Original = current end
+                if current ~= value then part[key] = value end
+            end)
+            if not ok then failed = true end
+        end
+        applied = applied+1
+    end
+    self.CollisionStatus = failed and "Some local properties unavailable" or (applied > 0 and "Local torso contacts enabled" or "Waiting for character")
 end
 function Extension:ObserveInstance(target, key, value, environment)
     if key == "Name" and value == "RobloxGameGui" and environment.typeof(target) == "Instance" then
@@ -371,6 +432,7 @@ end
 function Extension:Destroy()
     if not self.Alive then return end
     self:SetAutoPlay(false)
+    self:SetPlayerCollisions(false)
     if self.ResetOffense then self:ResetOffense() end
     self:ClearTarget(); self:StopAutoMove()
     self.Alive = false

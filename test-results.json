@@ -7,22 +7,23 @@
   "scheduled_gameplay_tasks_tested": false,
   "live_Hoopz_tested": false,
   "Hoopz_mock_startup": "pass",
-  "Hoopz_mock_actions": 2246,
+  "Hoopz_mock_actions": 2294,
   "requested_defaults_verified": {
-    "magnetStrength": 50,
-    "antiDrop": true,
-    "guard": true,
-    "jumpMatch": true,
     "reach": true,
-    "ballCheck": true,
-    "aim": true,
-    "basket": "Nearest",
-    "dribble": true,
-    "autoPlay": false,
-    "reachStrength": 10,
     "walkSpeed": 0.01,
+    "collisions": false,
+    "ballCheck": true,
+    "guardKey": "Enum.KeyCode.L",
+    "jumpMatch": true,
+    "reachStrength": 10,
+    "dribble": true,
+    "basket": "Nearest",
+    "aim": true,
+    "guard": true,
     "magnet": true,
-    "guardKey": "Enum.KeyCode.L"
+    "autoPlay": false,
+    "antiDrop": true,
+    "magnetStrength": 50
   },
   "aim_key_picker_removed": true,
   "guard_key_picker_retained": true,
@@ -42,5 +43,7 @@
     "typing and guard key conflict",
     "queued-shot cancellation",
     "fully blocked routes and cleanup"
-  ]
+  ],
+  "player_collisions_regression": "pass: default-off, torso-only changes within20, exclusions, server baseline and external values, range/death/respawn/disable/unload restoration",
+  "live_player_push_verified": false
 }
