@@ -187,14 +187,26 @@ function Extension:AutoPlayStep(character, humanoid, root)
                 end
                 local ok, message = pcall(function()
                     if not valid() then return end
+                    self.ShotAttempt = {Valid=valid, Dispatched=false}
+                    self.AutoJumpSuppressUntil=self.Clock+0.7
                     self.AutoPlayStatus = "Jumping for shot"
                     if self:RequestAutoJump(humanoid,root,valid) and valid() then
                         self.AutoPlayStatus = "Shooting (experimental)"
-                        self.AimAction()
+                        if not self.ShotAttempt.Dispatched then
+                            self.ShotAttempt.Dispatched=true
+                            self.AimAction()
+                        else
+                            for _=1,40 do
+                                if self.ShotAttempt.Completed or not self.Alive then break end
+                                self.Environment.task.wait(0.025)
+                            end
+                            if self.ShotAttempt.Error then error(self.ShotAttempt.Error) end
+                        end
                     elseif valid() then self.AutoPlayStatus = "Jump did not start: retrying" end
                 end)
                 if not ok then self.AutoPlayStatus = "Shot unavailable: " .. tostring(message) end
                 if self.ReleaseJumpKey then self:ReleaseJumpKey() end
+                self.ShotAttempt = nil
                 self.Shooting = false
             end)
         end
@@ -240,6 +252,7 @@ function Extension:Install(environment, settings)
         settings.AutoPlayBasket = "Nearest"
         settings.PlayerCollisions = false
         settings.AutoPlayKeybind = environment.Enum.KeyCode.J
+        settings.AutoPlayCamera = true
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -255,6 +268,7 @@ function Extension:Install(environment, settings)
     settings.AutoPlayBasket = "Nearest"
     settings.PlayerCollisions = false
     settings.AutoPlayKeybind = environment.Enum.KeyCode.J
+    settings.AutoPlayCamera = true
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -263,7 +277,11 @@ function Extension:Install(environment, settings)
         end
     end)
     self.RenderName = "UltimateAutoPlay_" .. tostring(self)
-    self.Run:BindToRenderStep(self.RenderName, environment.Enum.RenderPriority.Camera.Value + 1, function()
+    self.Run:BindToRenderStep(self.RenderName, environment.Enum.RenderPriority.Camera.Value + 1, function(dt)
+        if self.UpdateAutoFacing then
+            local ok=pcall(self.UpdateAutoFacing,self,dt or 1/60)
+            if not ok and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
+        end
         if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self.Target and not self:IsManual() then
             local character, humanoid = characterParts(self.Player)
             if humanoid and not self.Shooting then humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true end
@@ -285,6 +303,10 @@ function Extension:InstallControls(section)
     section:NewToggle({Title = "Auto-play dribble", Default = true, Callback = function(value)
         self.Settings.AutoPlayDribble = value
         if not value and self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(true) end
+    end})
+    section:NewToggle({Title = "Auto-play camera", Default = true, Callback = function(value)
+        self.Settings.AutoPlayCamera=value
+        if not value and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
     end})
     section:NewDropdown({Title = "Attack basket", Data = {"Nearest", "Second nearest"}, Default = "Nearest", Callback = function(value)
         self.Settings.AutoPlayBasket = value
@@ -380,9 +402,19 @@ customizeClosure = function(name, original, environment, captures)
     elseif name == "root.106" then
         Extension.AimAction = original
         return function(...)
-            -- Synthetic Space also emits JumpRequest. The queued Auto-play shot
-            -- owns this attempt and calls original once AFTER takeoff.
-            if Extension.Shooting and Extension.Settings and Extension.Settings.AutoPlay then return end
+            -- Let the normal JumpRequest path keep its original ShotDelay timing.
+            -- Claim once; the queued fallback must not issue a duplicate shot.
+            if Extension.Shooting and Extension.Settings and Extension.Settings.AutoPlay then
+                local attempt=Extension.ShotAttempt
+                if not attempt or attempt.Dispatched or not attempt.Valid() then return end
+                attempt.Dispatched=true
+                local ok,message=pcall(original,...)
+                attempt.Completed=true
+                if not ok then attempt.Error=tostring(message) end
+                return
+            end
+            if Extension.Settings and Extension.Settings.AutoPlay and Extension.AutoJumpSuppressUntil
+                and Extension.Clock < Extension.AutoJumpSuppressUntil then return end
             return original(...)
         end
     elseif name == "root.2138" then

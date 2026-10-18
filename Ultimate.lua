@@ -288,14 +288,26 @@ function Extension:AutoPlayStep(character, humanoid, root)
                 end
                 local ok, message = pcall(function()
                     if not valid() then return end
+                    self.ShotAttempt = {Valid=valid, Dispatched=false}
+                    self.AutoJumpSuppressUntil=self.Clock+0.7
                     self.AutoPlayStatus = "Jumping for shot"
                     if self:RequestAutoJump(humanoid,root,valid) and valid() then
                         self.AutoPlayStatus = "Shooting (experimental)"
-                        self.AimAction()
+                        if not self.ShotAttempt.Dispatched then
+                            self.ShotAttempt.Dispatched=true
+                            self.AimAction()
+                        else
+                            for _=1,40 do
+                                if self.ShotAttempt.Completed or not self.Alive then break end
+                                self.Environment.task.wait(0.025)
+                            end
+                            if self.ShotAttempt.Error then error(self.ShotAttempt.Error) end
+                        end
                     elseif valid() then self.AutoPlayStatus = "Jump did not start: retrying" end
                 end)
                 if not ok then self.AutoPlayStatus = "Shot unavailable: " .. tostring(message) end
                 if self.ReleaseJumpKey then self:ReleaseJumpKey() end
+                self.ShotAttempt = nil
                 self.Shooting = false
             end)
         end
@@ -341,6 +353,7 @@ function Extension:Install(environment, settings)
         settings.AutoPlayBasket = "Nearest"
         settings.PlayerCollisions = false
         settings.AutoPlayKeybind = environment.Enum.KeyCode.J
+        settings.AutoPlayCamera = true
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -356,6 +369,7 @@ function Extension:Install(environment, settings)
     settings.AutoPlayBasket = "Nearest"
     settings.PlayerCollisions = false
     settings.AutoPlayKeybind = environment.Enum.KeyCode.J
+    settings.AutoPlayCamera = true
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -364,7 +378,11 @@ function Extension:Install(environment, settings)
         end
     end)
     self.RenderName = "UltimateAutoPlay_" .. tostring(self)
-    self.Run:BindToRenderStep(self.RenderName, environment.Enum.RenderPriority.Camera.Value + 1, function()
+    self.Run:BindToRenderStep(self.RenderName, environment.Enum.RenderPriority.Camera.Value + 1, function(dt)
+        if self.UpdateAutoFacing then
+            local ok=pcall(self.UpdateAutoFacing,self,dt or 1/60)
+            if not ok and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
+        end
         if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self.Target and not self:IsManual() then
             local character, humanoid = characterParts(self.Player)
             if humanoid and not self.Shooting then humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true end
@@ -386,6 +404,10 @@ function Extension:InstallControls(section)
     section:NewToggle({Title = "Auto-play dribble", Default = true, Callback = function(value)
         self.Settings.AutoPlayDribble = value
         if not value and self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(true) end
+    end})
+    section:NewToggle({Title = "Auto-play camera", Default = true, Callback = function(value)
+        self.Settings.AutoPlayCamera=value
+        if not value and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
     end})
     section:NewDropdown({Title = "Attack basket", Data = {"Nearest", "Second nearest"}, Default = "Nearest", Callback = function(value)
         self.Settings.AutoPlayBasket = value
@@ -481,9 +503,19 @@ customizeClosure = function(name, original, environment, captures)
     elseif name == "root.106" then
         Extension.AimAction = original
         return function(...)
-            -- Synthetic Space also emits JumpRequest. The queued Auto-play shot
-            -- owns this attempt and calls original once AFTER takeoff.
-            if Extension.Shooting and Extension.Settings and Extension.Settings.AutoPlay then return end
+            -- Let the normal JumpRequest path keep its original ShotDelay timing.
+            -- Claim once; the queued fallback must not issue a duplicate shot.
+            if Extension.Shooting and Extension.Settings and Extension.Settings.AutoPlay then
+                local attempt=Extension.ShotAttempt
+                if not attempt or attempt.Dispatched or not attempt.Valid() then return end
+                attempt.Dispatched=true
+                local ok,message=pcall(original,...)
+                attempt.Completed=true
+                if not ok then attempt.Error=tostring(message) end
+                return
+            end
+            if Extension.Settings and Extension.Settings.AutoPlay and Extension.AutoJumpSuppressUntil
+                and Extension.Clock < Extension.AutoJumpSuppressUntil then return end
             return original(...)
         end
     elseif name == "root.2138" then
@@ -530,12 +562,20 @@ function Extension:ReleaseDribbleKeys(all)
 end
 function Extension:ResetOffense()
     self:ReleaseDribbleKeys(true)
+    if self.Environment then self:ReleaseJumpKey() end
+    if self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
     self.OffenseGoal, self.OffenseCharacter, self.ShotSpot, self.SpotScore = nil, nil, nil, nil
     self.OpenSince, self.ProgressPosition, self.ProgressTime, self.StuckUntil = nil, nil, nil, nil
     self.LastPlan = nil
     self.RouteDirection, self.RouteHoldUntil = nil, nil
+    self.SettlePosition,self.SettleSince=nil,nil
 end
 function Extension:ReleaseJumpKey()
+    if not self.Environment then return end
+    if self.ExecutorJumpHeld then
+        if type(self.Environment.keyrelease)=="function" then pcall(self.Environment.keyrelease,0x20) end
+        self.ExecutorJumpHeld=false
+    end
     local key = self.Environment.Enum.KeyCode.Space
     if self.DribbleKeys and self.DribbleKeys[key] then
         if self.VirtualInput then pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,false,key,false,self.Environment.game) end
@@ -551,6 +591,12 @@ function Extension:RequestAutoJump(humanoid, root, valid)
     -- Use the game's normal jump input too; some character controllers consume
     -- or overwrite the Jump property before the next simulation step.
     if not self.Input:IsKeyDown(self.Environment.Enum.KeyCode.Space) then
+        if type(self.Environment.keypress)=="function" and type(self.Environment.keyrelease)=="function" then
+            self.ExecutorJumpHeld=true
+            local ok=pcall(self.Environment.keypress,0x20)
+            if not ok then self.ExecutorJumpHeld=false end
+            self.Environment.task.delay(0.12,function() self:ReleaseJumpKey() end)
+        end
         if not self.VirtualInput then
             local ok, service = pcall(self.Environment.game.GetService,self.Environment.game,"VirtualInputManager")
             if ok then self.VirtualInput=service end
@@ -563,7 +609,7 @@ function Extension:RequestAutoJump(humanoid, root, valid)
             self.Environment.task.delay(0.08,function() self:ReleaseJumpKey() end)
         end
     end
-    for _=1,12 do
+    for _=1,20 do
         if not valid() then self:ReleaseJumpKey();return false end
         if humanoid.FloorMaterial == self.Environment.Enum.Material.Air and root.AssemblyLinearVelocity.Y > 1 then
             self:ReleaseJumpKey();return true
@@ -575,6 +621,7 @@ function Extension:RequestAutoJump(humanoid, root, valid)
 end
 function Extension:ReadOpponents(root)
     local result = {}
+    self.OpponentMemory=self.OpponentMemory or setmetatable({},{__mode="k"})
     for _, player in ipairs(self.Players:GetPlayers()) do
         local sameTeam = self.Player.Team and player.Team == self.Player.Team
             and self.Player.Neutral == false and player.Neutral == false
@@ -583,7 +630,14 @@ function Extension:ReadOpponents(root)
             if character and math.abs(other.Position.Y-root.Position.Y) < 12
                 and flat(other.Position-root.Position).Magnitude < 90 then
                 local velocity = flat(other.AssemblyLinearVelocity)
+                local previous=self.OpponentMemory[player]
+                local elapsed=previous and self.Clock-previous.Time or 0
+                if elapsed>=0.06 and elapsed<=0.5 then
+                    local measured=flat(other.Position-previous.Position)/elapsed
+                    if measured.Magnitude<=45 then velocity=velocity*0.55+measured*0.45 end
+                end
                 if velocity.Magnitude > 32 then velocity = unit(velocity)*32 end
+                self.OpponentMemory[player]={Time=self.Clock,Position=other.Position,Velocity=velocity}
                 result[#result+1] = {
                     Player=player, Position=other.Position, Predicted=other.Position+velocity*0.3,
                     Velocity=velocity, Airborne=humanoid.FloorMaterial == self.Environment.Enum.Material.Air
@@ -699,8 +753,12 @@ function Extension:SteerTo(root, destination, opponents)
             for _, opponent in ipairs(opponents) do
                 if flat(opponent.Position-root.Position).Magnitude < 14 then
                     cost = cost + math.max(0,8-flat(point-opponent.Predicted).Magnitude)*2
+                    local intercept=opponent.Position+opponent.Velocity*math.min(0.5,length/16)
+                    cost=cost+math.max(0,7-flat(point-intercept).Magnitude)*3
                 end
             end
+            local ahead=point+unit(destination-point)*math.min(4,flat(destination-point).Magnitude)
+            if not self:WalkClear(point,ahead,params) then cost=cost+14 end
             if self.StuckUntil and self.Clock < self.StuckUntil then
                 cost = cost + (degrees == 0 and 30 or 0) + (degrees*self.EscapeSide < 0 and 8 or 0)
             end
@@ -712,6 +770,62 @@ function Extension:SteerTo(root, destination, opponents)
         self.RouteDirection=unit(best-root.Position)
     end
     return best
+end
+function Extension:ReleaseAutoFacing()
+    local humanoid=self.AutoFacingHumanoid
+    if humanoid then
+        pcall(function()
+            if humanoid.AutoRotate==false then humanoid.AutoRotate=self.SavedAutoRotate end
+        end)
+    end
+    self.AutoFacingHumanoid,self.SavedAutoRotate=nil,nil
+end
+function Extension:UpdateAutoFacing(dt)
+    local env=self.Environment
+    if not env or not env.CFrame or not self.Alive or not self.Settings.AutoPlay or not self.Settings.AutoPlayCamera
+        or self.Shooting or not self.AutoMovePoint or self:IsManual() then self:ReleaseAutoFacing();return end
+    local character,humanoid,root=characterParts(self.Player)
+    if not humanoid or not heldBall(character) then self:ReleaseAutoFacing();return end
+    local activeCamera=env.workspace.CurrentCamera
+    if activeCamera and env.Enum.CameraType and activeCamera.CameraType==env.Enum.CameraType.Scriptable then
+        self:ReleaseAutoFacing();return
+    end
+    local mouseType=env.Enum.UserInputType and env.Enum.UserInputType.MouseButton2
+    local cameraInput=false
+    if mouseType and type(self.Input.IsMouseButtonPressed)=="function" then
+        local ok,down=pcall(self.Input.IsMouseButtonPressed,self.Input,mouseType)
+        cameraInput=ok and down
+    end
+    if type(self.Input.GetMouseDelta)=="function" then
+        local ok,delta=pcall(self.Input.GetMouseDelta,self.Input)
+        if ok and delta and delta.Magnitude>2 then cameraInput=true end
+    end
+    if cameraInput then self.CameraPauseUntil=self.Clock+0.8 end
+    if self.CameraPauseUntil and self.Clock<self.CameraPauseUntil then self:ReleaseAutoFacing();return end
+    local nearby=self:SpaceAt(root.Position,self.OpponentReads or {})
+    if nearby>20 then self:ReleaseAutoFacing();return end
+    local direction=flat(self.AutoMovePoint-root.Position)
+    if direction.Magnitude<0.6 then self:ReleaseAutoFacing();return end
+    direction=unit(direction)
+    if self.AutoFacingHumanoid~=humanoid then
+        self:ReleaseAutoFacing();self.AutoFacingHumanoid=humanoid;self.SavedAutoRotate=humanoid.AutoRotate
+    end
+    humanoid.AutoRotate=false
+    local alpha=1-math.exp(-8*math.min(dt,0.1))
+    root.CFrame=root.CFrame:Lerp(env.CFrame.lookAt(root.Position,root.Position+direction),alpha)
+    local camera=env.workspace.CurrentCamera
+    if camera and camera.CameraSubject==humanoid then
+        local focus=root.Position+env.Vector3.new(0,2,0)
+        local offset=camera.CFrame.Position-focus
+        local zoom=flat(offset).Magnitude
+        if zoom>2 then
+            local desired=focus-direction*zoom+env.Vector3.new(0,offset.Y,0)
+            local params=self:MakeRayParams()
+            local hit=params and env.workspace:Raycast(focus,desired-focus,params)
+            if hit then desired=hit.Position+unit(focus-hit.Position)*0.6 end
+            camera.CFrame=camera.CFrame:Lerp(env.CFrame.lookAt(desired,focus),1-math.exp(-4*math.min(dt,0.1)))
+        end
+    end
 end
 function Extension:PulseDribble(name)
     if not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.35
@@ -781,14 +895,20 @@ function Extension:OffenseStep(character, humanoid, root)
     self.OpponentReads = opponents
     local space, jumping = self:SpaceAt(root.Position,opponents)
     local canShoot = self:CanTakeShot(root)
-    if canShoot and humanoid.FloorMaterial ~= self.Environment.Enum.Material.Air
-        and flat(root.AssemblyLinearVelocity).Magnitude < 3 then
+    if canShoot and humanoid.FloorMaterial ~= self.Environment.Enum.Material.Air then
         self:StopAutoMove();self:ReleaseDribbleKeys(true)
+        if not self.SettlePosition or flat(root.Position-self.SettlePosition).Magnitude > 0.7 then
+            self.SettlePosition,self.SettleSince=root.Position,self.Clock
+        end
+        local stationary = flat(root.AssemblyLinearVelocity).Magnitude < 3
+            or self.Clock-(self.SettleSince or self.Clock)>=0.2
+        if not stationary then self.AutoPlayStatus="Stopping for shot";return false end
         self.OpenSince = self.OpenSince or self.Clock
         self.AutoPlayStatus="Open shot: settling"
         return self.Clock-self.OpenSince >= 0.25
     end
     self.OpenSince=nil
+    self.SettlePosition,self.SettleSince=nil,nil
     -- Stop on an open spot first; take the shot only after movement settles.
     if canShoot then self:StopAutoMove();self.AutoPlayStatus="Stopping for shot";return false end
     local params = self:MakeRayParams()
