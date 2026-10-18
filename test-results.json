@@ -66,5 +66,46 @@
   "live_dribble_speed_verified": false,
   "video_reference": "user supplied 2026-10-17 21-18-08.mp4; local frame inspection, including0.1s samples of3-5.3s; dispatch cadence chosen to approximate fast chains, not an exact input benchmark",
   "live_dunk_verified": false,
-  "test_platform": "Linux shell on user machine, Lua 5.5.0 built from github.com/lua/lua tag v5.5.0 (LUA_DLL=liblua55.so)"
+  "test_platform": "Linux shell on user machine, Lua 5.5.0 from github.com/lua/lua v5.5.0",
+  "autoplay_simulation": "pass: shadow shot 6.68s, cutter shot 6.90s, second-nearest shot 1.88s (previous build: no shot in 12s / 15s); verification, Action freeze, manual Space aim protection, mouse handback, escapes, hesitation, respawn, 25x toggles, destroy",
+  "performance_mock_10s": {
+    "holding_ball": {
+      "Raycast": [
+        6976,
+        1285
+      ],
+      "RaycastParams": [
+        764,
+        10
+      ],
+      "GetPlayers": [
+        849,
+        18
+      ],
+      "GetTagged": [
+        171,
+        5
+      ],
+      "MoveTo": [
+        594,
+        43
+      ]
+    },
+    "seeking_ball": {
+      "GetDescendants": [
+        10,
+        1
+      ],
+      "Raycast": [
+        1120,
+        130
+      ],
+      "MoveTo": [
+        600,
+        21
+      ]
+    },
+    "note": "previous->current; partly behavioral; mock only"
+  },
+  "shot_verification": "Action attribute, release within 1s, closest rim pass; offline only"
 }

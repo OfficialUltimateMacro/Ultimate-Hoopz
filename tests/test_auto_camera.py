@@ -25,7 +25,9 @@ e:UpdateAutoFacing(.05);assert(oh.AutoRotate==false and camera.CFrame~=initialCa
 local prevLook=root.CFrame.LookVector;assert(prevLook.Z>0 and prevLook.Z<.5,'body yaw eased, not snapped')
 for _=1,20 do e:UpdateAutoFacing(1/60) end
 assert((root.CFrame.Position-root.Position).Magnitude<.001,'no positional teleport')
-assert(root.CFrame.LookVector.Z>.6,'body converges on chosen route')
+local want=e:DesiredFacing(root);local look=root.CFrame.LookVector
+assert(look.X*want.X+look.Z*want.Z>.97,'body converges on desired facing')
+assert(want.X<0 and want.Z>0,'facing blends drive direction with the basket')
 local d0=(camera.CFrame.Position-root.Position).Magnitude
 for _=1,240 do e:UpdateAutoFacing(1/60) end
 local d1=(camera.CFrame.Position-root.Position).Magnitude

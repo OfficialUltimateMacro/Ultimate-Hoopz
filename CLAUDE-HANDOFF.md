@@ -1,5 +1,15 @@
 # Ultimate Hoopz â€” handoff for Claude or another coding agent
 
+## Latest (Claude, round 2): smarter offense, camera/body coordination, verification, performance
+
+Video (C:\Users\youss\Videos\2026-10-17 21-18-08.mp4, contact sheets in work/video): solo practice; shift-lock style (cursor centered, body faces camera, strafing with crossovers ~0.2-0.4s); deep shots taken facing rim with camera directly behind; low camera pitch; power meter 75/80/85 on left. Decoded Blessed facts: root.106 saves camera CFrame, sets lookAt via GetDeArc, waits, clicks via VIM, restores; Power attribute set from 55-74 stud distance tables (root.142/167/169); Character attribute Action = Shooting/Dunking; Remotes.Server.Action. Web search found no developer documentation for Hoopz mechanics.
+
+Bugs fixed: (1) manual Space shot while Auto-play held ball: camera assist overwrote original aim mid-routine -> root.106 wrapper tracks AimDepth for both paths, assist releases; physical Space now IsManual (synthetic Space/jump excluded). (2) Second nearest never shot (spot near selected goal but other goal nearer) -> GoalIsNearestAt filter, wider sample angles. (3) endless dribble vs shadowing defender -> 4.5s AttackMode, 8s ForceShot, escape cap 4. (4) shot tracker only started if routine finished within outer 1s wait -> starts from routine completion. (5) render loop kept MoveTo during game Shooting/Dunking -> per-frame check. ResetOffense no longer runs every tick off-ball. Pickup steering uses opponent reads. PulseKey refuses the Auto-play key too.
+
+New: PlanEscape (committed lateral escape/hesitation, hand-aware EscapeMove), bounded pump fake (airborne blocker <7, <=0.45s), sweet-spot band, corridor rim drive (DriveUntil), DunkReach adaptation, StartShotTrack/TrackShot/FinishShotTrack with counters shown in Shot status, DesiredFacing + rate-limited yaw (approachYaw maxSpeed), CameraIntervention (mouse delta>1, RMB; 1s pause). Caches: PlayerList .5s, Goals 2s, MakeRayParams 1s, BallSet event-driven (DescendantAdded), MoveTo throttle (.4 stud / 1s), SteerTo branch-and-bound (same choice, fewer rays).
+
+Tests: new tests/sim_fixture.lua, tests/test_autoplay_sim.py, tests/test_performance.py; offense/camera tests updated for pump fake and DesiredFacing. All 11 suites + full startup (2474 actions) pass with LUA_DLL=~/lua55/liblua55.so on the Linux shell. Baseline build kept at work/perf-baseline.decoded.lua (fails shadow + second-nearest sims). Publication: this session had no GitHub credentials; run `python work/publish_main.py` on Windows (gh) - it includes tests/*.lua, writes github-publication.json, verifies main bytes and refreshes the ZIP. Live Hoopz: nothing in this round verified in game.
+
 ## Latest preference: Ball Magnet defaults OFF
 
 Only the startup BallMagnet preference changed to false; strength stays50. Auto-play behavior and all other settings unchanged. Rebuilt and full mocked default startup checked before publishing. This supersedes older magnet-on defaults below.

@@ -15,3 +15,6 @@ Run `python tests/test_auto_camera.py` and `python tests/test_original_shot.py`.
 Shot dispatch regressions now explicitly force RequestAutoJump to return false and assert the recovered VM still emits exactly one mouse press/release. Offense checks accept basket endpoint structures while preserving distant obstruction rejection. Full startup verifies Shot status UI creation.
 
 Run `python tests/test_dribble_tempo.py` for0.14s spacing, separate0.28/0.55s repeat gates, short holds, render-based input between planning scans, manual pause and release on disable. This checks dispatch cadence, not server animation acceptance.
+
+
+Run `python tests/test_autoplay_sim.py [build.lua]` for frame-stepped Auto-play on `sim_fixture.lua` (stored signals, counted engine calls, DescendantAdded, 4000-item workspace): shadowing and cutting defenders must end in a shot, Second-nearest shoots, shot release/rim and dunk verification with reach adaptation, Action freeze, manual Space aim protection, mouse handback, committed escapes, hesitation, respawn, 25x toggle leak check and destroy. Against the previous build the shadowing and Second-nearest scenarios fail. `python tests/test_performance.py [build.lua]` prints call counts and asserts budgets for the current build. Neither proves live Hoopz behaviour.

@@ -34,6 +34,13 @@ function Extension:IsManual()
     for _, name in ipairs({"W", "A", "S", "D", "Up", "Down", "Left", "Right"}) do
         if input:IsKeyDown(enum.KeyCode[name]) then self.ManualUntil = self.Clock + 0.3; return true end
     end
+    -- A physical Space press is a manual jump/shot; ignore our own synthetic
+    -- Space pulses and the jump an Auto-play shot is performing.
+    local space = enum.KeyCode.Space
+    if space and input:IsKeyDown(space) and not self.Shooting and not self.ExecutorJumpHeld
+        and not (self.DribbleKeys and self.DribbleKeys[space]) then
+        self.ManualUntil = self.Clock + 0.3; return true
+    end
     return self.Clock < self.ManualUntil
 end
 function Extension:MirrorJump(player, humanoid)
@@ -96,7 +103,7 @@ function Extension:GuardKey(input, processed, captures)
     end
 end
 function Extension:StopAutoMove()
-    self.AutoMovePoint = nil
+    self.AutoMovePoint, self.LastMoveToPoint = nil, nil
     if self.AutoMoving then
         local _, humanoid, root = characterParts(self.Player)
         if humanoid then humanoid:MoveTo(root.Position) end
@@ -129,28 +136,11 @@ function Extension:SetAutoPlay(enabled)
     end
 end
 function Extension:LooseBall(root)
-    if self.Clock - self.LastBallScan >= 1 then
-        self.LastBallScan, self.Balls = self.Clock, {}
-        local players = self.Players:GetPlayers()
-        for _, part in ipairs(self.Environment.workspace:GetDescendants()) do
-            if part:IsA("BasePart") and (part.Name == "Ball" or part.Name == "Basketball") then
-                local owned = false
-                for _, player in ipairs(players) do
-                    if player.Character and part:IsDescendantOf(player.Character) then owned = true; break end
-                end
-                if not owned then self.Balls[#self.Balls + 1] = part end
-            end
-        end
-    end
     local nearest, best = nil, 50
-    for _, part in ipairs(self.Balls or {}) do
-        if part.Parent then
-            local owned = false
-            for _, player in ipairs(self.Players:GetPlayers()) do
-                if player.Character and part:IsDescendantOf(player.Character) then owned = true; break end
-            end
+    for part in pairs(self:BallSet()) do
+        if part.Parent and not self:BallOwner(part) then
             local d = distance(root.Position, part.Position)
-            if not owned and d < best then nearest, best = part, d end
+            if d < best then nearest, best = part, d end
         end
     end
     return nearest
@@ -158,7 +148,7 @@ end
 function Extension:InShotRange(root)
     local high = self.Settings.AimbotType == "High"
     local minimum, maximum = high and 57 or 58, high and 73 or 74
-    local goals = self.Collection:GetTagged("FieldGoals")
+    local goals = self.Goals and self:Goals() or self.Collection:GetTagged("FieldGoals")
     for _, goal in ipairs(goals) do
         if goal:IsA("BasePart") then
             local d = distance(root.Position, goal.Position)
@@ -169,7 +159,7 @@ function Extension:InShotRange(root)
 end
 function Extension:AutoPlayStep(character, humanoid, root)
     if self:IsManual() then
-        if self.ResetOffense then self:ResetOffense() end
+        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
         self:StopAutoMove(); self.AutoPlayStatus = "Paused: manual input"; return
     end
     if heldBall(character) then
@@ -188,6 +178,7 @@ function Extension:AutoPlayStep(character, humanoid, root)
                 local ok, message = pcall(function()
                     if not valid() then return end
                     self.ShotAttempt = {Valid=valid, Dispatched=false}
+                    local goalAtShot=self.OffenseGoal
                     local attempt=self.ShotAttempt
                     self.ShotAttempts=(self.ShotAttempts or 0)+1
                     self.AutoJumpSuppressUntil=self.Clock+0.7
@@ -197,7 +188,16 @@ function Extension:AutoPlayStep(character, humanoid, root)
                     attempt.Dispatched=true
                     self.Environment.task.spawn(function()
                         local shotOK,shotError=pcall(function()
-                            if attempt.Valid() then self.AimAction() end
+                            if attempt.Valid() then
+                                self.AimDepth=(self.AimDepth or 0)+1
+                                local aimOK,aimError=pcall(self.AimAction)
+                                self.AimDepth=math.max(0,self.AimDepth-1)
+                                if not aimOK then error(aimError,0) end
+                                attempt.Ran=true
+                                -- Verify from the routine's own completion; the
+                                -- original yields for ShotDelay before clicking.
+                                if self.StartShotTrack then self:StartShotTrack("Shot", character, self.OffenseGoal or goalAtShot, nil) end
+                            end
                         end)
                         attempt.Completed=true
                         if not shotOK then attempt.Error=tostring(shotError) end
@@ -210,6 +210,7 @@ function Extension:AutoPlayStep(character, humanoid, root)
                     end
                     if attempt.Error then error(attempt.Error) end
                     self.LastShotResult=jumped and "Shot routine sent with jump" or "Shot routine sent; jump unconfirmed"
+
                     self.AutoPlayStatus=self.LastShotResult
                 end)
                 if not ok then
@@ -222,13 +223,15 @@ function Extension:AutoPlayStep(character, humanoid, root)
             end)
         end
     elseif self.Target and self.Settings.AutoGuard then
-        if self.ResetOffense then self:ResetOffense() end
+        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
         self:StopAutoMove(); self.AutoPlayStatus = "Defending the Ball Check target"
     else
-        if self.ResetOffense then self:ResetOffense() end
+        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
         local ball = self:LooseBall(root)
         if ball then
-            self.AutoMovePoint = self.SteerTo and self:SteerTo(root, ball.Position, {}) or ball.Position
+            local reads = self.ReadOpponents and self:ReadOpponents(root) or {}
+            local close = (ball.Position-root.Position).Magnitude < 6
+            self.AutoMovePoint = (not close and self.SteerTo) and (self:SteerTo(root, ball.Position, reads) or ball.Position) or ball.Position
             self.AutoPlayStatus = self.AutoMovePoint and "Seeking loose ball" or "Pickup route blocked"
         else self:StopAutoMove(); self.AutoPlayStatus = "Scanning nearby balls" end
     end
@@ -237,6 +240,7 @@ function Extension:Tick(dt)
     if not self.Alive or not self.Settings then return end
     self.Clock = self.Clock + math.max(0, math.min(dt, 0.5))
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
+    if self.ShotTrack and self.TrackShot then self:TrackShot() end
     self.TickAccumulator = (self.TickAccumulator or 0) + dt
     if self.TickAccumulator < 0.1 then return end
     self.TickAccumulator = 0
@@ -297,10 +301,21 @@ function Extension:Install(environment, settings)
         end
         if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self.Target and not self:IsManual() then
             local character, humanoid, root = characterParts(self.Player)
-            if humanoid and not self.Shooting then
-                humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true
-                if self.ChooseDribble and heldBall(character) then
-                    pcall(self.ChooseDribble,self,root,self.AutoMovePoint,self.OpponentReads or {},heldBall(character))
+            local action = humanoid and self.GameAction and self:GameAction(character)
+            if action == "Shooting" or action == "Dunking" then
+                self:StopAutoMove()
+            elseif humanoid and not self.Shooting then
+                -- Re-issue MoveTo only when the target meaningfully changes
+                -- (or to refresh Roblox's 8 s MoveTo timeout).
+                local last = self.LastMoveToPoint
+                if not self.AutoMoving or self.LastMoveToHumanoid ~= humanoid or not last
+                    or (last-self.AutoMovePoint).Magnitude > 0.4 or self.Clock-(self.LastMoveToTime or -100) > 1 then
+                    humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true
+                    self.LastMoveToPoint, self.LastMoveToTime, self.LastMoveToHumanoid = self.AutoMovePoint, self.Clock, humanoid
+                end
+                local ball = heldBall(character)
+                if self.ChooseDribble and ball then
+                    pcall(self.ChooseDribble,self,root,self.AutoMovePoint,self.OpponentReads or {},ball)
                 end
             end
         end
@@ -334,7 +349,10 @@ function Extension:InstallControls(section)
         if captures and captures[2] and type(captures[2].Notification)=="function" then
             pcall(function()
                 captures[2].Notification().new({Title="Auto-play shot status",Description=(self.LastShotResult or "No shot routine sent yet")
-                    .."\n"..tostring(self.ShotBlockReason or self.AutoPlayStatus).."\nShots: "..tostring(self.ShotAttempts or 0).."  Dunks: "..tostring(self.DunkAttempts or 0),Duration=8})
+                    .."\n"..tostring(self.AutoPlayStatus).." / "..tostring(self.ShotBlockReason or "-")
+                    .."\nShots sent "..tostring(self.ShotAttempts or 0).." | released "..tostring(self.ShotsReleased or 0)
+                    .." | reached rim "..tostring(self.ShotsNearRim or 0)
+                    .."\nDunks sent "..tostring(self.DunkAttempts or 0).." | started "..tostring(self.DunksStarted or 0),Duration=8})
             end)
         end
     end})
@@ -438,14 +456,24 @@ customizeClosure = function(name, original, environment, captures)
                 local attempt=Extension.ShotAttempt
                 if not attempt or attempt.Dispatched or not attempt.Valid() then return end
                 attempt.Dispatched=true
+                Extension.AimDepth=(Extension.AimDepth or 0)+1
                 local ok,message=pcall(original,...)
+                Extension.AimDepth=math.max(0,Extension.AimDepth-1)
+                attempt.Ran=ok or nil
                 attempt.Completed=true
                 if not ok then attempt.Error=tostring(message) end
                 return
             end
             if Extension.Settings and Extension.Settings.AutoPlay and Extension.AutoJumpSuppressUntil
                 and Extension.Clock < Extension.AutoJumpSuppressUntil then return end
-            return original(...)
+            -- Manual Space shot: keep the camera assist off the camera while
+            -- the original routine aims it (it saves, aims, clicks, restores).
+            Extension.AimDepth=(Extension.AimDepth or 0)+1
+            if Extension.ReleaseAutoFacing then pcall(Extension.ReleaseAutoFacing, Extension) end
+            local results=table.pack(pcall(original,...))
+            Extension.AimDepth=math.max(0,Extension.AimDepth-1)
+            if not results[1] then error(results[2],0) end
+            return table.unpack(results,2,results.n)
         end
     elseif name == "root.2138" then
         return function(...)
