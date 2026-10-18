@@ -300,11 +300,11 @@ function Extension:UpdateAutoFacing(dt)
     end
 end
 function Extension:PulseDribble(name)
-    if not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.35
+    if not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.14
         or self:IsManual() or self.Shooting then return false end
     local key = self.Environment.Enum.KeyCode[name]
     self.MoveCooldowns = self.MoveCooldowns or {}
-    if self.Clock-(self.MoveCooldowns[name] or -100) < (name == "R" and 1.05 or 0.65) then return false end
+    if self.Clock-(self.MoveCooldowns[name] or -100) < (name == "R" and 0.55 or 0.28) then return false end
     if key == self.Settings.AutoGuardKeybind then return false end
     if self.Input:IsKeyDown(key) then return false end
     if not self.VirtualInput then
@@ -313,13 +313,13 @@ function Extension:PulseDribble(name)
         self.VirtualInput = service
     end
     self.DribbleKeys = self.DribbleKeys or {}
-    self.DribbleKeys[key] = self.Clock+0.07
+    self.DribbleKeys[key] = self.Clock+0.04
     local ok = pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,true,key,false,self.Environment.game)
     if not ok then self:ReleaseDribbleKeys(true);self.DribbleStatus="Input unavailable";return false end
     self.LastDribble,self.DribbleStatus = self.Clock,name
     self.MoveCooldowns[name] = self.Clock
     -- Release independently of the planner too, even if its heartbeat stops.
-    self.Environment.task.delay(0.08,function()
+    self.Environment.task.delay(0.045,function()
         if self.DribbleKeys[key] then
             pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,false,key,false,self.Environment.game)
             self.DribbleKeys[key]=nil
@@ -340,7 +340,7 @@ function Extension:ChooseDribble(root, point, opponents, ball)
     local threatSide = flat(threat.Predicted-root.Position):Dot(right)
     local closing = flat(threat.Position-root.Position):Dot(threat.Velocity) < -6
     local name
-    local fakeReady = self.Clock-((self.MoveCooldowns or {}).R or -100) >= 1.05
+    local fakeReady = self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.55
     if fakeReady and (threat.Airborne or nearest < 16) then name="R"
     elseif closing and nearest < 8 then name=routeSide < 0 and "V" or "B"
     elseif nearest < 7 and math.abs(threatSide) < 2 then name="C"

@@ -294,8 +294,13 @@ function Extension:Install(environment, settings)
             if not ok and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
         end
         if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self.Target and not self:IsManual() then
-            local character, humanoid = characterParts(self.Player)
-            if humanoid and not self.Shooting then humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true end
+            local character, humanoid, root = characterParts(self.Player)
+            if humanoid and not self.Shooting then
+                humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true
+                if self.ChooseDribble and heldBall(character) then
+                    pcall(self.ChooseDribble,self,root,self.AutoMovePoint,self.OpponentReads or {},heldBall(character))
+                end
+            end
         end
     end)
 end

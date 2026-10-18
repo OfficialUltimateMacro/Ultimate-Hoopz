@@ -13,3 +13,5 @@ Run `python tests/test_auto_jump.py` for native Space/state jump requests, confi
 Run `python tests/test_auto_camera.py` and `python tests/test_original_shot.py`. Both share the vector/world fixture from test_ultimate_offense.py. The former checks camera/body alignment and restoration plus stable-position settling; the latter runs the original recovered VM shot routine and full native/executor dispatch integration, asserting exactly one mocked mouse press and release. These do not run Roblox, so they cannot prove the live native jump backend works.
 
 Shot dispatch regressions now explicitly force RequestAutoJump to return false and assert the recovered VM still emits exactly one mouse press/release. Offense checks accept basket endpoint structures while preserving distant obstruction rejection. Full startup verifies Shot status UI creation.
+
+Run `python tests/test_dribble_tempo.py` for0.14s spacing, separate0.28/0.55s repeat gates, short holds, render-based input between planning scans, manual pause and release on disable. This checks dispatch cadence, not server animation acceptance.

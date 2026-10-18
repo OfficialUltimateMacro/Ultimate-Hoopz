@@ -81,7 +81,7 @@ e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.
 assert(keys[#keys][1] and keys[#keys][2]=='F','left to right behind back')
 local count=#keys;e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(#keys==count,'dribble cooldown')
 e:ReleaseDribbleKeys(true);assert(keys[#keys][1]==false and keys[#keys][2]=='F','release on stop')
-e.Clock=5;own.Character.ball.Position=root.Position+v(0,0,1)
+e.Clock=5;e.MoveCooldowns.R=e.Clock;own.Character.ball.Position=root.Position+v(0,0,1)
 e:ChooseDribble(root,root.Position+v(0,0,-8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='G' and keys[#keys][1])
 e:ReleaseDribbleKeys(true);e.Clock=6;eh.FloorMaterial='Air';e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R')
 e:ReleaseDribbleKeys(true);e.Clock=7;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;eh.FloorMaterial='Ground';er.Position=root.Position+v(-6,0,0);er.AssemblyLinearVelocity=v(3,0,0)

@@ -59,5 +59,8 @@
   "opponent_prediction": "position-history velocity blend and two-step intercept-aware local steering; offline only",
   "shot_gate_regression": "pass: rim/backboard endpoint permitted, distant wall rejected",
   "shot_status_UI": "full mocked startup verifies Shot status button; shows reason, attempts and dispatch/error",
-  "live_shooting_verified": false
+  "live_shooting_verified": false,
+  "dribble_tempo_regression": "pass: .14s global gap, .28s same ordinary move, .55s R, .04s hold and render dispatch independent of route planning; manual pause and cleanup",
+  "live_dribble_speed_verified": false,
+  "video_reference": "user supplied 2026-10-17 21-18-08.mp4; local frame inspection, including0.1s samples of3-5.3s; dispatch cadence chosen to approximate fast chains, not an exact input benchmark"
 }
