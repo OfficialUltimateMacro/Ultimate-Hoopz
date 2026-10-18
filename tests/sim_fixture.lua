@@ -41,7 +41,7 @@ end
 F.part=part
 local function player(pos,name)
  local r=part(pos,'HumanoidRootPart');r.CFrame=frame(pos,pos+v(-1,0,0))
- local h={Health=100,FloorMaterial='Ground',Jumping=signal(),moves=0,AutoRotate=true}
+ local h={Health=100,FloorMaterial='Ground',Jumping=signal(),Died=signal(),StateChanged=signal(),moves=0,AutoRotate=true}
  function h:MoveTo(p)C.MoveTo=C.MoveTo+1;self.point=p;self.moves=self.moves+1 end
  function h:ChangeState()end
  local c={Parent=true,root=r,h=h,attrs={}}
@@ -52,10 +52,20 @@ local function player(pos,name)
  return pl,h,r
 end
 F.player=player
+function F.container(owner,withBall)
+ local c={Name='Basketball',Parent=true,Position=v()}
+ function c:IsA(k)return k=='Model'end
+ function c:FindFirstChild(n)if n=='Ball'then return self.ballPart end end
+ function c:FindFirstChildWhichIsA()return self.ballPart end
+ function c:SetBall(on)if on then self.ballPart=self.ballPart or F.part(v(),'Ball');self.ballPart.Owner=owner else if self.ballPart then self.ballPart.Owner=nil end;self.ballPart=nil end end
+ c:SetBall(withBall)
+ return c
+end
 F.world={DescendantAdded=signal(),DescendantRemoving=signal(),extra={}}
 local world=F.world
 function world:Raycast(origin,d,params)
  C.Raycast=C.Raycast+1
+ if self.hook then local h=self.hook(origin,d);if h then return h end end
  if d.Y < -8 and math.abs(d.X)<1e-9 and math.abs(d.Z)<1e-9 then return {Position=v(origin.X,0,origin.Z),Normal=v(0,1,0),Material='Ground'} end
  if self.wallX and ((origin.X-self.wallX)*(origin.X+d.X-self.wallX)<0) and math.abs(origin.Z)<self.wallHalf then return {Instance={},Position=v(self.wallX,origin.Y,origin.Z),Normal=v(1,0,0)} end
  return nil
@@ -99,8 +109,9 @@ function F.step(e,dt,speed)
  if h.point and not e.Shooting then
   local d=h.point-F.root.Position;d=v(d.X,0,d.Z)
   local m=d.Magnitude
+  speed=speed or F.speed or 16
   if m>0.05 then local step=math.min(m,(speed or 16)*dt);F.root.Position=F.root.Position+d/m*step;F.root.AssemblyLinearVelocity=d/m*(speed or 16) else F.root.AssemblyLinearVelocity=v() end
  end
- if F.own.Character.ball then F.own.Character.ball.Position=F.root.Position+v(0,0,-1) end
+ for _,pl in ipairs({F.own,F.enemy})do local c=pl.Character;local b=c and c.ball;if b then local r=c.root;b.Position=r.Position+v(0,0,-1);if b.ballPart then b.ballPart.Position=b.Position end end end
 end
 return F

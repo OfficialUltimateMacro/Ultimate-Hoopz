@@ -114,11 +114,30 @@ local function characterParts(player)
     local root = character:FindFirstChild("HumanoidRootPart")
     if humanoid and root and humanoid.Health > 0 then return character, humanoid, root end
 end
+-- Possession. Blessed's own selector counts a player as the handler only when
+-- Character.Basketball contains a "Ball"; an empty container can remain after
+-- a turnover. Once that layout has been observed, require it.
+local BallLayout = {Learned = false}
 local function heldBall(character)
-    return character and character:FindFirstChild("Basketball")
+    local container = character and character:FindFirstChild("Basketball")
+    if not container then return nil end
+    local ok, ball = pcall(function() return container.FindFirstChild and container:FindFirstChild("Ball") end)
+    if ok and ball then BallLayout.Learned = true; return container end
+    if BallLayout.Learned then return nil end
+    return container
 end
 local function distance(a, b)
     return (a - b).Magnitude
+end
+-- Bounded diagnostics: a ring buffer of transitions/events, never per-frame.
+function Extension:Log(kind, text)
+    local log = self.EventLog or {}
+    self.EventLog = log
+    local stamp = string.format("T+%.1f", self.Clock-(self.AutoPlayStarted or 0))
+    local okDate, wall = pcall(function() return os.date("%H:%M:%S") end)
+    if okDate and wall then stamp = wall.." "..stamp end
+    log[#log+1] = stamp.." "..kind..": "..tostring(text)
+    if #log > 60 then table.remove(log, 1) end
 end
 function Extension:Connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -131,21 +150,21 @@ function Extension:ClearTarget()
 end
 function Extension:IsManual()
     local input, enum = self.Input, self.Environment.Enum
-    if input:GetFocusedTextBox() then return true end
+    if input:GetFocusedTextBox() then self.ManualReason = "typing"; return true end
     for _, name in ipairs({"W", "A", "S", "D", "Up", "Down", "Left", "Right"}) do
-        if input:IsKeyDown(enum.KeyCode[name]) then self.ManualUntil = self.Clock + 0.3; return true end
+        if input:IsKeyDown(enum.KeyCode[name]) then self.ManualUntil = self.Clock + 0.3; self.ManualReason = name; return true end
     end
     -- A physical Space press is a manual jump/shot; ignore our own synthetic
     -- Space pulses and the jump an Auto-play shot is performing.
     local space = enum.KeyCode.Space
     if space and input:IsKeyDown(space) and not self.Shooting and not self.ExecutorJumpHeld
         and not (self.DribbleKeys and self.DribbleKeys[space]) then
-        self.ManualUntil = self.Clock + 0.3; return true
+        self.ManualUntil = self.Clock + 0.3; self.ManualReason = "Space"; return true
     end
     return self.Clock < self.ManualUntil
 end
 function Extension:MirrorJump(player, humanoid)
-    if not self.Alive or not self.Settings or not self.Settings.AutoGuard
+    if not self.Alive or not self.Settings or not (self.Settings.AutoGuard or self.Settings.AutoPlay)
         or not self.Settings.AutoGuardJumpMatch or self:IsManual() then return false end
     -- Re-run the SAME selector, including Ball Check and its 50-stud limit.
     local selected = self.Selector and self.Selector()
@@ -161,7 +180,7 @@ function Extension:SelectTarget(player)
     local character, humanoid, root = characterParts(player)
     if self.Target == player and self.TargetCharacter == character and self.TargetHumanoid == humanoid then return end
     self:ClearTarget()
-    if not character or not self.Settings or not self.Settings.AutoGuard then return end
+    if not character or not self.Settings or not (self.Settings.AutoGuard or self.Settings.AutoPlay) then return end
     self.Target, self.TargetCharacter, self.TargetHumanoid = player, character, humanoid
     self.JumpConnection = humanoid.Jumping:Connect(function(active)
         if active then self:MirrorJump(player, humanoid) end
@@ -220,20 +239,27 @@ function Extension:SetAutoPlay(enabled)
         pcall(self.AutoPlayToggle.SetValue, enabled)
     end
     if enabled then
-        self.AutoPlaySnapshot = {}
-        for _, name in ipairs({"Aimbot", "AutoGuard", "BallMagnet", "BallReach"}) do
+        -- Auto-play defends on its own, so Blessed's Auto Guard is switched
+        -- off (one movement writer) and restored when Auto-play stops.
+        self.AutoPlaySnapshot, self.AutoPlayApplied = {}, {}
+        for name, value in pairs({Aimbot=true, AutoGuard=false, BallMagnet=true, BallReach=true}) do
             self.AutoPlaySnapshot[name] = self.Settings[name]
-            self:SetFeature(name, true)
+            self.AutoPlayApplied[name] = value
+            self:SetFeature(name, value)
         end
+        self.AutoPlayStarted, self.State, self.StateSince = self.Clock, nil, self.Clock
         self.AutoPlayStatus = "Experimental: scanning"
+        self:Log("toggle", "Auto-play enabled (Auto Guard off)")
     else
         if self.ResetOffense then self:ResetOffense() end
         self:StopAutoMove()
         for name, value in pairs(self.AutoPlaySnapshot or {}) do
             -- Restore only values that still match the ones Auto-play applied.
-            if self.Settings[name] == true then self:SetFeature(name, value) end
+            if self.Settings[name] == (self.AutoPlayApplied or {})[name] then self:SetFeature(name, value) end
         end
-        self.AutoPlaySnapshot, self.AutoPlayStatus = nil, "Off"
+        self.AutoPlaySnapshot, self.AutoPlayApplied, self.AutoPlayStatus = nil, nil, "Off"
+        self.State, self.PendingState = "Off", nil
+        self:Log("toggle", "Auto-play disabled (Auto Guard restored)")
     end
 end
 function Extension:LooseBall(root)
@@ -258,12 +284,97 @@ function Extension:InShotRange(root)
     end
     return false
 end
-function Extension:AutoPlayStep(character, humanoid, root)
-    if self:IsManual() then
-        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
-        self:StopAutoMove(); self.AutoPlayStatus = "Paused: manual input"; return
+local function isTeammate(self, player)
+    return self.Player.Team ~= nil and player.Team == self.Player.Team
+        and self.Player.Neutral == false and player.Neutral == false
+end
+-- Raw possession read: who holds the ball right now.
+function Extension:ReadPossession(character)
+    if heldBall(character) then return "Own", self.Player end
+    for _, player in ipairs(self:PlayerList()) do
+        if player ~= self.Player then
+            local other = player.Character
+            if other and other.Parent and heldBall(other) then
+                return isTeammate(self, player) and "Teammate" or "Opponent", player
+            end
+        end
     end
-    if heldBall(character) then
+    return "Loose", nil
+end
+-- Explicit state with debouncing so brief reparenting during a dribble or a
+-- delayed replication does not flip offense/defense.
+function Extension:UpdateState(character, humanoid, root)
+    local now = self.Clock
+    local state, holder, reason
+    local last = self.LastRootPosition
+    self.LastRootPosition = root.Position
+    if last and (root.Position-last).Magnitude > 25 then
+        self.ResetUntil = now+0.6
+        self:Log("reset", string.format("teleport %.0f studs (score/reset or respawn)", (root.Position-last).Magnitude))
+    end
+    local busy = self.Shooting or (self.AimDepth or 0) > 0 or (self.DunkingUntil and now < self.DunkingUntil)
+    if self:IsManual() then state, reason = "Manual", tostring(self.ManualReason or "input")
+    elseif self.ResetUntil and now < self.ResetUntil then state, reason = "Reset", "position reset"
+    elseif busy then state, reason = "Shot", self.Shooting and "shot routine" or ((self.AimDepth or 0) > 0 and "aim routine" or "dunk")
+    else
+        local raw, who = self:ReadPossession(character)
+        local committed = self.State
+        if raw == committed or committed == nil or committed == "Manual" or committed == "Reset" or committed == "Shot" or committed == "Off" then
+            state, holder = raw, who
+            self.PendingState = nil
+        else
+            -- Leaving our own possession needs longer confirmation (dribble
+            -- reparenting); other changes confirm quickly.
+            -- A confirmed opponent holder is acted on quickly (steal); a ball
+            -- briefly out of our container waits longer (dribble reparent).
+            local hold = (committed == "Own" and raw == "Loose") and 0.3 or (raw == "Loose" and 0.25 or 0.12)
+            if self.PendingState ~= raw then self.PendingState, self.PendingSince = raw, now end
+            if now-self.PendingSince >= hold then state, holder = raw, who; self.PendingState = nil
+            else state, holder = committed, self.Holder end
+        end
+        reason = holder and holder.Name or "ball"
+    end
+    if state ~= self.State then
+        self:Log("state", tostring(self.State).." -> "..state.." ("..tostring(reason)..")")
+        self.LastTransition = tostring(self.State).."->"..state.." ("..tostring(reason)..")"
+        local was = self.State
+        self.State, self.StateSince = state, now
+        if was == "Own" and state ~= "Shot" and self.ResetOffense then self:ResetOffense() end
+        if state ~= "Opponent" then self.DefenseGoal, self.LastDefenseTarget, self.DefenseFacing = nil, nil, nil end
+        if state ~= "Own" and state ~= "Shot" then self.ShotSpot = nil end
+        self.AutoMovePoint = nil
+    end
+    self.Holder = holder
+    return state, holder
+end
+function Extension:AutoPlayStep(character, humanoid, root)
+    local state, holder = self:UpdateState(character, humanoid, root)
+    if state == "Manual" then
+        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
+        self:StopAutoMove(); self.StopReason = "manual input ("..tostring(self.ManualReason)..")"
+        self.AutoPlayStatus = "Paused: manual input"; return
+    end
+    if state == "Reset" then
+        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
+        self:StopAutoMove(); self.StopReason = "dead ball / reset"; self.AutoPlayStatus = "Reset: waiting"; return
+    end
+    if state == "Shot" then self.StopReason = "shot/dunk in progress"; return end
+    if state == "Opponent" then
+        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
+        self:DefenseStep(character, humanoid, root, holder)
+        self.StopReason = self.AutoMovePoint and nil or self.DefenseIntent
+        self.AutoPlayStatus = "Defense: "..tostring(self.DefenseIntent); return
+    end
+    if state == "Teammate" then
+        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
+        self:StopAutoMove(); self.StopReason = "teammate has the ball"; self.AutoPlayStatus = "Teammate possession"; return
+    end
+    if state == "Own" and not heldBall(character) then
+        -- Possession change still being confirmed: do not run offense
+        -- without the ball; keep still until the state settles.
+        self:StopAutoMove(); self.StopReason = "confirming possession"; return
+    end
+    if state == "Own" then
         self:ClearTarget()
         if self.OffenseStep and not self:OffenseStep(character, humanoid, root) then return end
         self:StopAutoMove()
@@ -323,9 +434,6 @@ function Extension:AutoPlayStep(character, humanoid, root)
                 self.Shooting = false
             end)
         end
-    elseif self.Target and self.Settings.AutoGuard then
-        if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
-        self:StopAutoMove(); self.AutoPlayStatus = "Defending the Ball Check target"
     else
         if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
         local ball = self:LooseBall(root)
@@ -334,7 +442,11 @@ function Extension:AutoPlayStep(character, humanoid, root)
             local close = (ball.Position-root.Position).Magnitude < 6
             self.AutoMovePoint = (not close and self.SteerTo) and (self:SteerTo(root, ball.Position, reads) or ball.Position) or ball.Position
             self.AutoPlayStatus = self.AutoMovePoint and "Seeking loose ball" or "Pickup route blocked"
-        else self:StopAutoMove(); self.AutoPlayStatus = "Scanning nearby balls" end
+        else
+            self:StopAutoMove(); self.AutoPlayStatus = "Scanning nearby balls"
+            local inGame = self.Player.GetAttribute and select(2, pcall(self.Player.GetAttribute, self.Player, "Ingame"))
+            self.StopReason = inGame == false and "not in game (waiting)" or "no ball in reach"
+        end
     end
 end
 function Extension:Tick(dt)
@@ -343,18 +455,99 @@ function Extension:Tick(dt)
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     if self.ShotTrack and self.TrackShot then self:TrackShot() end
     self.TickAccumulator = (self.TickAccumulator or 0) + dt
-    if self.TickAccumulator < 0.1 then return end
+    -- Faster decisions when an attacker is close; 10 Hz otherwise.
+    if self.TickAccumulator < (self.PlanInterval or 0.1) then return end
     self.TickAccumulator = 0
+    self.PlanCount = (self.PlanCount or 0)+1
+    self:Watchdogs()
     if self.Settings.PlayerCollisions and self.UpdatePlayerCollisions then self:UpdatePlayerCollisions() end
     local character, humanoid, root = characterParts(self.Player)
     if not humanoid then
         if self.ResetOffense then self:ResetOffense() end
+        if self.ShotTrack and self.FinishShotTrack then self:FinishShotTrack("Cancelled: character died/reset") end
+        if self.State ~= "Dead" and self.Settings.AutoPlay then self:Log("state", tostring(self.State).." -> Dead"); self.State = "Dead" end
+        self.Shooting, self.ShotAttempt, self.AimDepth, self.DunkingUntil = false, nil, 0, nil
         self:ClearTarget(); self:StopAutoMove(); self.AutoPlayStatus = "Waiting for respawn"; return
     end
-    if self.Settings.AutoGuard and self.Selector and not heldBall(character) and not self:IsManual() then
+    self:WatchCharacter(character, humanoid)
+    if (self.Settings.AutoGuard or self.Settings.AutoPlay) and self.Selector and not heldBall(character) and not self:IsManual() then
         self:SelectTarget(self.Selector())
     else self:ClearTarget() end
     if self.Settings.AutoPlay then self:AutoPlayStep(character, humanoid, root) end
+end
+-- Bounded recovery for confirmed stale internal state. Genuine game actions
+-- and manual input are not overridden.
+function Extension:Watchdogs()
+    local now = self.Clock
+    if self.Shooting then
+        self.ShootingSince = self.ShootingSince or now
+        if now-self.ShootingSince > 4 then
+            self:Log("watchdog", "shot routine flag stuck 4s: cleared")
+            self.Shooting, self.ShotAttempt = false, nil
+        end
+    else self.ShootingSince = nil end
+    if (self.AimDepth or 0) > 0 then
+        self.AimSince = self.AimSince or now
+        if now-self.AimSince > 5 then self:Log("watchdog", "aim depth stuck 5s: cleared"); self.AimDepth = 0 end
+    else self.AimSince = nil end
+    -- Stalled movement: a destination we are not approaching.
+    local _, humanoid, root = characterParts(self.Player)
+    if root and self.AutoMovePoint and self.Settings.AutoPlay then
+        local away = (self.AutoMovePoint-root.Position).Magnitude
+        if not self.StallPosition or (root.Position-self.StallPosition).Magnitude > 0.5 then
+            self.StallPosition, self.StallSince = root.Position, now
+        elseif away > 3 and now-self.StallSince > 2 then
+            self:Log("watchdog", string.format("movement stalled %.1fs, %.0f studs from target: re-issued", now-self.StallSince, away))
+            self.LastMoveToPoint, self.StallSince = nil, now
+        end
+    else self.StallPosition = nil end
+    local close = self.State == "Opponent" and self.Holder and characterParts(self.Holder)
+    local _, _, holderRoot = characterParts(self.Holder)
+    self.PlanInterval = (close and root and holderRoot and (holderRoot.Position-root.Position).Magnitude < 18) and 0.05 or 0.1
+end
+-- Death/knockdown instrumentation (the recording shows bodies breaking apart;
+-- the cause is not visible on video).
+function Extension:WatchCharacter(character, humanoid)
+    if self.WatchedCharacter == character then return end
+    for _, connection in ipairs(self.CharacterConnections or {}) do disconnect(connection) end
+    self.CharacterConnections, self.WatchedCharacter = {}, character
+    if humanoid.Died then
+        self.CharacterConnections[1] = humanoid.Died:Connect(function()
+            self:Log("character", "Humanoid died (action="..tostring(self.GameAction and self:GameAction(character))..")")
+        end)
+    end
+    if humanoid.StateChanged then
+        self.CharacterConnections[2] = humanoid.StateChanged:Connect(function(_, new)
+            local name = tostring(new)
+            if name:find("Physics") or name:find("Ragdoll") or name:find("FallingDown") or name:find("Dead") or name:find("PlatformStanding") then
+                self:Log("character", "state "..name)
+            end
+        end)
+    end
+end
+function Extension:StatusText()
+    local now=self.Clock
+    local function name(player) return player and player.Name or "-" end
+    local character=self.Player and self.Player.Character
+    local action=self.GameAction and self:GameAction(character)
+    local manual=self.Clock<(self.ManualUntil or 0) and string.format("%s %.1fs", tostring(self.ManualReason), self.ManualUntil-now) or "none"
+    local lines={
+        string.format("State %s for %.1fs | %s", tostring(self.State or "-"), now-(self.StateSince or now), self.LastTransition or "-"),
+        "Holder "..name(self.Holder).." | jump target "..name(self.Target),
+        "Basket "..tostring((self.State=="Opponent" and self.DefenseGoal or self.OffenseGoal) and (self.State=="Opponent" and self.DefenseGoal or self.OffenseGoal).Name or "-")
+            .." | intent "..tostring(self.State=="Opponent" and self.DefenseIntent or self.AutoPlayStatus),
+        "Stopped: "..tostring(self.AutoMovePoint and "moving" or (self.StopReason or "-")).." | manual "..manual,
+        "Action "..tostring(action).." | shooting "..tostring(self.Shooting==true).." aim "..tostring(self.AimDepth or 0)
+            .." dunking "..tostring(self.DunkingUntil~=nil and now<self.DunkingUntil),
+        (self.LastShotResult or "No shot yet").." / "..tostring(self.ShotBlockReason or "-"),
+        "Shots sent "..tostring(self.ShotAttempts or 0).." released "..tostring(self.ShotsReleased or 0)
+            .." near rim "..tostring(self.ShotsNearRim or 0).." | dunks "..tostring(self.DunkAttempts or 0).."/"..tostring(self.DunksStarted or 0)
+            .." | contests "..tostring(self.ContestCount or 0),
+        "Last error: "..tostring(self.LastError or "none"),
+    }
+    local log=self.EventLog or {}
+    for k=math.max(1,#log-3),#log do lines[#lines+1]=log[k] end
+    return table.concat(lines,"\n")
 end
 function Extension:Install(environment, settings)
     -- Blessed can initialize a second settings table while choosing its game
@@ -390,8 +583,19 @@ function Extension:Install(environment, settings)
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
-            self:StopAutoMove(); self:SetAutoPlay(false)
-            self.AutoPlayStatus = "Paused: " .. tostring(message)
+            -- Recover from a single bad frame; only repeated errors disable.
+            self.LastError = tostring(message)
+            self:Log("error", self.LastError)
+            self:StopAutoMove()
+            if self.ResetOffense then pcall(self.ResetOffense, self) end
+            self.ErrorTimes = self.ErrorTimes or {}
+            local times = self.ErrorTimes
+            times[#times+1] = self.Clock
+            while times[1] and self.Clock-times[1] > 10 do table.remove(times, 1) end
+            if #times >= 5 then
+                self:SetAutoPlay(false)
+                self.AutoPlayStatus = "Paused after repeated errors: " .. tostring(message)
+            else self.AutoPlayStatus = "Recovered from error: " .. tostring(message) end
         end
     end)
     self.RenderName = "UltimateAutoPlay_" .. tostring(self)
@@ -400,10 +604,10 @@ function Extension:Install(environment, settings)
             local ok=pcall(self.UpdateAutoFacing,self,dt or 1/60)
             if not ok and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
         end
-        if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self.Target and not self:IsManual() then
+        if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self:IsManual() then
             local character, humanoid, root = characterParts(self.Player)
             local action = humanoid and self.GameAction and self:GameAction(character)
-            if action == "Shooting" or action == "Dunking" then
+            if (action == "Shooting" or action == "Dunking") and not self.FreezeLogged then
                 self:StopAutoMove()
             elseif humanoid and not self.Shooting then
                 -- Re-issue MoveTo only when the target meaningfully changes
@@ -414,7 +618,7 @@ function Extension:Install(environment, settings)
                     humanoid:MoveTo(self.AutoMovePoint); self.AutoMoving = true
                     self.LastMoveToPoint, self.LastMoveToTime, self.LastMoveToHumanoid = self.AutoMovePoint, self.Clock, humanoid
                 end
-                local ball = heldBall(character)
+                local ball = (self.State == "Own" or self.State == nil) and heldBall(character)
                 if self.ChooseDribble and ball then
                     pcall(self.ChooseDribble,self,root,self.AutoMovePoint,self.OpponentReads or {},ball)
                 end
@@ -449,13 +653,15 @@ function Extension:InstallControls(section)
         local captures=self.InputCaptures
         if captures and captures[2] and type(captures[2].Notification)=="function" then
             pcall(function()
-                captures[2].Notification().new({Title="Auto-play shot status",Description=(self.LastShotResult or "No shot routine sent yet")
-                    .."\n"..tostring(self.AutoPlayStatus).." / "..tostring(self.ShotBlockReason or "-")
-                    .."\nShots sent "..tostring(self.ShotAttempts or 0).." | released "..tostring(self.ShotsReleased or 0)
-                    .." | reached rim "..tostring(self.ShotsNearRim or 0)
-                    .."\nDunks sent "..tostring(self.DunkAttempts or 0).." | started "..tostring(self.DunksStarted or 0),Duration=8})
+                captures[2].Notification().new({Title="Auto-play status",Description=self:StatusText(),Duration=10})
             end)
         end
+    end})
+    section:NewButton({Title = "Copy Auto-play log", Callback = function()
+        local text=self:StatusText().."\n--- events ---\n"..table.concat(self.EventLog or {},"\n")
+        local copy=self.Environment.setclipboard or self.Environment.toclipboard
+        if type(copy)=="function" then pcall(copy,text) end
+        self.LastLogCopy=text
     end})
     section:NewDropdown({Title = "Attack basket", Data = {"Nearest", "Second nearest"}, Default = "Nearest", Callback = function(value)
         self.Settings.AutoPlayBasket = value
@@ -534,6 +740,8 @@ function Extension:Destroy()
     self:ClearTarget(); self:StopAutoMove()
     self.Alive = false
     for _, connection in ipairs(self.Connections) do disconnect(connection) end
+    for _, connection in ipairs(self.CharacterConnections or {}) do disconnect(connection) end
+    self.CharacterConnections, self.WatchedCharacter = {}, nil
     self.Connections = {}
     if self.Run and self.RenderName then self.Run:UnbindFromRenderStep(self.RenderName) end
 end
@@ -579,6 +787,7 @@ customizeClosure = function(name, original, environment, captures)
     elseif name == "root.2138" then
         return function(...)
             if Extension.Installed and Extension:IsManual() then Extension:ClearTarget(); return end
+            if Extension.Installed and Extension.Settings and Extension.Settings.AutoPlay then return end
             return original(...)
         end
     end
@@ -719,6 +928,7 @@ function Extension:ResetOffense()
     self.DunkMode, self.DriveUntil, self.DunkingUntil = nil, nil, nil
     self.Plan, self.EscapeCount, self.NextEscape, self.PossessionStart = nil, 0, nil, nil
     self.FakeShotStart, self.ForceShot, self.AttackMode = nil, nil, nil
+    self.FreezeSince, self.FreezeLogged = nil, nil
 end
 function Extension:ReleaseJumpKey()
     if not self.Environment then return end
@@ -798,6 +1008,19 @@ function Extension:PulseKey(name, hold, cooldown, force)
     return true
 end
 function Extension:PulseDribble(name)
+    -- Wait (bounded 0.6 s) while Hoopz reports an action from a previous move.
+    local action = gameAction(self.Player and self.Player.Character)
+    if action ~= nil and action ~= "" then
+        if self.ActionSeenValue ~= action then
+            self.ActionSeenValue, self.ActionSeenSince = action, self.Clock
+            self.ActionsSeen = self.ActionsSeen or {}
+            if not self.ActionsSeen[action] then
+                self.ActionsSeen[action] = true
+                if self.Log then self:Log("action", "Hoopz Action value seen: "..tostring(action)) end
+            end
+        end
+        if self.Clock-(self.ActionSeenSince or self.Clock) < 0.6 then return false end
+    else self.ActionSeenValue = nil end
     return self:PulseKey(name, 0.04, name == "R" and 0.4 or 0.2)
 end
 
@@ -880,6 +1103,7 @@ function Extension:ShotLaneClear(root, goal, params)
     if not params or not goal then return false end
     -- Conservative straight line to basket; this is not a ballistic simulation.
     local hit = self.Environment.workspace:Raycast(root.Position, goal.Position-root.Position, params)
+    self.LastLaneHit = hit
     if hit==nil or hit.Instance==goal then return true end
     -- The goal's rim/backboard can intercept a straight diagnostic ray even
     -- though the recovered shot follows an arc into that same basket.
@@ -892,8 +1116,13 @@ function Extension:CanTakeShot(root)
     if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
     if not self:InShotRange(root) then self.ShotBlockReason="Outside shooting range";return false end
     if not self:ShotLaneClear(root,goal,self:MakeRayParams()) then
-        if not self.ForceShot then self.ShotBlockReason="Shot line blocked";return false end
-        self.ShotBlockReason="Line check failed repeatedly: shooting anyway"
+        -- After 8 s, a straight-line miss that ends near the hoop (rim/net
+        -- structure) no longer blocks; a real wall in between still does.
+        local hit=self.LastLaneHit
+        if not (self.ForceShot and hit and hit.Position and (hit.Position-goal.Position).Magnitude<=15) then
+            self.ShotBlockReason="Shot line blocked";return false
+        end
+        self.ShotBlockReason="Line hit near the hoop for 8s: shooting anyway"
         return true
     end
     -- Defenders never veto the shot: contested shots go up immediately.
@@ -1005,6 +1234,23 @@ function Extension:ReleaseAutoFacing()
     end
     self.AutoFacingHumanoid,self.SavedAutoRotate=nil,nil
     self.FaceYaw,self.CameraYaw,self.CameraDistance,self.CameraCurrentDistance=nil,nil,nil,nil
+    self.CameraPitch,self.CameraFirstPerson=nil,nil
+end
+-- A camera hit only counts as a wall when it is real, visible, anchored
+-- geometry: not the dribbled ball, hitboxes, effects or invisible barriers.
+function Extension:IsCameraBlocker(hit)
+    local part = hit and hit.Instance
+    if not part then return false end
+    local ok, blocks = pcall(function()
+        if part.Name == "Ball" or part.Name == "Basketball" then return false end
+        if part.Transparency > 0.6 or part.Anchored == false then return false end
+        local size = part.Size
+        if math.max(size.X, size.Y, size.Z) < 4 then return false end
+        if part.FindFirstAncestor and part:FindFirstAncestor("Hitboxes") then return false end
+        return true
+    end)
+    if not ok then return true end
+    return blocks
 end
 local atan2 = math.atan2 or math.atan
 local function yawOf(d) return atan2(d.X, d.Z) end
@@ -1039,6 +1285,7 @@ function Extension:DesiredFacing(root)
     local goalDir=toGoal and toGoal.Magnitude>0.5 and unit(toGoal)
     local move=self.AutoMovePoint and flat(self.AutoMovePoint-root.Position)
     local moveDir=move and move.Magnitude>0.6 and unit(move)
+    if self.State=="Opponent" then return self.DefenseFacing end
     local plan=self.Plan
     if plan and plan.Facing then return plan.Facing end
     if not moveDir then return goalDir end
@@ -1055,14 +1302,17 @@ function Extension:UpdateAutoFacing(dt)
     if not env or not env.CFrame or not self.Alive or not self.Settings.AutoPlay or not self.Settings.AutoPlayCamera
         or self.Shooting or (self.AimDepth or 0)>0 or self:IsManual() then self:ReleaseAutoFacing();return end
     local character,humanoid,root=characterParts(self.Player)
-    if not humanoid or not heldBall(character) then self:ReleaseAutoFacing();return end
+    local defending=self.State=="Opponent" and self.DefenseFacing~=nil
+    local offense=(self.State=="Own" or self.State==nil) and heldBall(character)
+    if not humanoid or not (offense or defending) then self:ReleaseAutoFacing();return end
     local action=gameAction(character)
     if action=="Shooting" or action=="Dunking" then self:ReleaseAutoFacing();return end
-    local activeCamera=env.workspace.CurrentCamera
-    if activeCamera and env.Enum.CameraType and activeCamera.CameraType==env.Enum.CameraType.Scriptable then
+    local camera=env.workspace.CurrentCamera
+    if camera and env.Enum.CameraType and camera.CameraType==env.Enum.CameraType.Scriptable then
         self:ReleaseAutoFacing();return
     end
     if self:CameraIntervention() then self.CameraPauseUntil=self.Clock+1 end
+    -- A camera pause only pauses camera/body assistance; movement continues.
     if self.CameraPauseUntil and self.Clock<self.CameraPauseUntil then self:ReleaseAutoFacing();return end
     local face=self:DesiredFacing(root)
     if not face then self:ReleaseAutoFacing();return end
@@ -1075,32 +1325,45 @@ function Extension:UpdateAutoFacing(dt)
     self.FaceYaw=approachYaw(self.FaceYaw,yawOf(face),12,9,dt)
     local bodyDir=env.Vector3.new(math.sin(self.FaceYaw),0,math.cos(self.FaceYaw))
     root.CFrame=env.CFrame.lookAt(root.Position,root.Position+bodyDir)
-    local camera=env.workspace.CurrentCamera
-    if not camera or camera.CameraSubject~=humanoid then return end
-    -- Camera looks up the court toward the basket; when the body has turned
-    -- far away (retreat/escape) it follows the body instead.
-    local goal=self.OffenseGoal
-    local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
-    local viewDir=bodyDir
-    if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(toGoal) end
+    if not camera or camera.CameraSubject~=humanoid then self.CameraYaw,self.CameraDistance=nil,nil;return end
+    -- Camera orbits the same focus Roblox uses, at YOUR current zoom radius,
+    -- so handing control back to the default camera never jumps.
+    local focus=root.Position+env.Vector3.new(0,1.5,0)
     if not self.CameraDistance then
-        local current=(camera.CFrame.Position-root.Position).Magnitude
-        self.CameraDistance=math.max(14,math.min(22,current==current and current or 16))
+        local offset=camera.CFrame.Position-focus
+        local radius=offset.Magnitude
+        if radius~=radius or radius<2 then self.CameraFirstPerson=true end
+        self.CameraDistance=math.max(8,math.min(40,radius==radius and radius or 14))
         self.CameraCurrentDistance=self.CameraDistance
+        self.CameraPitch=math.asin(math.max(-0.99,math.min(0.99,offset.Y/math.max(radius,0.001))))
         local look=camera.CFrame.LookVector
         if look and flat(look).Magnitude>0.1 then self.CameraYaw=yawOf(look) end
     end
+    if self.CameraFirstPerson then return end
+    local viewDir
+    if defending then
+        -- Defense: keep the attacker in frame from the basket side.
+        viewDir=self.DefenseFacing
+    else
+        local goal=self.OffenseGoal
+        local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
+        viewDir=bodyDir
+        if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(toGoal) end
+    end
     self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),3,2.6,dt)
+    -- Ease pitch into a court-reading band, never into the floor or overhead.
+    local wantPitch=math.max(0.28,math.min(0.6,self.CameraPitch or 0.36))
+    self.CameraPitch=(self.CameraPitch or wantPitch)+(wantPitch-(self.CameraPitch or wantPitch))*(1-math.exp(-2*math.min(dt,0.1)))
     local camDir=env.Vector3.new(math.sin(self.CameraYaw),0,math.cos(self.CameraYaw))
-    local focus=root.Position+env.Vector3.new(0,2.5,0)+camDir*4
-    local pitch=0.36
+    local back=camDir*(-math.cos(self.CameraPitch))+env.Vector3.new(0,math.sin(self.CameraPitch),0)
     local wanted=self.CameraDistance
-    local back=camDir*(-math.cos(pitch))+env.Vector3.new(0,math.sin(pitch),0)
     local params=self:MakeRayParams()
     local hit=params and env.workspace:Raycast(focus,back*wanted,params)
-    if hit and hit.Position then wanted=math.max(6,(hit.Position-focus).Magnitude-0.8) end
+    if hit and hit.Position and self:IsCameraBlocker(hit) then
+        wanted=math.max(4,(hit.Position-focus).Magnitude-0.8)
+    end
     local current=self.CameraCurrentDistance or wanted
-    local rate=wanted<current and 20 or 2.5
+    local rate=wanted<current and 10 or 2.5
     current=current+(wanted-current)*(1-math.exp(-rate*math.min(dt,0.1)))
     self.CameraCurrentDistance=current
     camera.CFrame=env.CFrame.lookAt(focus+back*current,focus)
@@ -1111,7 +1374,7 @@ end
 ---------------------------------------------------------------------------
 local VARIETY = {"C","H","F","G","V","B","R"}
 function Extension:ChooseDribble(root, point, opponents, ball)
-    if not point or (self.Plan and self.Clock < self.Plan.Until) then return end
+    if not point or not ball or (self.Plan and self.Clock < self.Plan.Until) then return end
     local threat, nearest = nil, 24
     for _, opponent in ipairs(opponents) do
         local d = flat(opponent.Position-root.Position).Magnitude
@@ -1162,6 +1425,15 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         local reached = plan.Point and flat(plan.Point-root.Position).Magnitude < 1
         if now < plan.Until and not reached then return plan end
         self.Plan = nil
+        if plan.Kind == "escape" then
+            -- Completion check: did the escape create separation?
+            local still = false
+            for _, opponent in ipairs(opponents) do
+                if flat(opponent.Position-root.Position).Magnitude < 4 then still = true end
+            end
+            self.EscapeFailed = self.EscapeFailed or {}
+            self.EscapeFailed[plan.Side] = still and now or nil
+        end
         if plan.Kind == "hesitate" then self.NextEscape = now else self.NextEscape = now+0.7 end
         plan = nil
     end
@@ -1185,6 +1457,9 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         preferred = hand ~= 0 and (hand > 0 and 1 or -1) or -(self.LastEscapeSide or 1)
     else preferred = defenderSide > 0 and -1 or 1 end
     local closingSpeed = -flat(defender.Position-root.Position):Dot(defender.Velocity)/math.max(gap,0.01)
+    -- Do not repeat a side that just failed to create space.
+    local failed = self.EscapeFailed or {}
+    if failed[preferred] and now-failed[preferred] < 2 then preferred = -preferred end
     local chosen
     for _, side in ipairs({preferred, -preferred}) do
         local point = root.Position+lateral*side*7+forward*3
@@ -1231,6 +1506,13 @@ function Extension:OffenseStep(character, humanoid, root)
     self.PossessionStart = self.PossessionStart or now
     local held = now-self.PossessionStart
     local action = gameAction(character)
+    if action == "Shooting" or action == "Dunking" then
+        self.FreezeSince = self.FreezeSince or now
+        if now-self.FreezeSince > 2.5 then
+            if not self.FreezeLogged and self.Log then self:Log("watchdog", "Action "..tostring(action).." stale >2.5s: resuming") end
+            self.FreezeLogged = true; action = nil
+        end
+    else self.FreezeSince, self.FreezeLogged = nil, nil end
     if action == "Shooting" or action == "Dunking" or (self.DunkingUntil and now < self.DunkingUntil) then
         self:StopAutoMove();self:ReleaseDribbleKeys(true)
         self.AutoPlayStatus = "Game action in progress: "..tostring(action or "dunk")
@@ -1371,6 +1653,7 @@ function Extension:FinishShotTrack(text)
     if not track then return end
     if track.Action then text = text.." [Action="..tostring(track.Action).."]" end
     self.LastShotResult = text
+    if self.Log then self:Log(track.Kind == "Dunk" and "dunk" or "shot", text) end
     if track.Kind == "Dunk" then
         if track.Released or track.Action == "Dunking" then
             self.DunksStarted = (self.DunksStarted or 0)+1
@@ -1385,29 +1668,46 @@ function Extension:TrackShot()
     local track = self.ShotTrack
     if not track then return end
     local character = track.Character
+    if self.Player.Character ~= character then self:FinishShotTrack("Cancelled: character changed"); return end
     local action = gameAction(character)
     if action == "Shooting" or action == "Dunking" then track.Action = action end
+    local root = character and character:FindFirstChild("HumanoidRootPart")
     if not track.Released then
-        if not heldBall(character) then
-            track.Released, track.ReleaseTime = true, self.Clock
-            if track.Kind == "Shot" then self.ShotsReleased = (self.ShotsReleased or 0)+1 end
-        elseif self.Clock-track.Start > 1.0 then
-            self:FinishShotTrack(track.Kind == "Dunk" and "Dunk: no dunk state and ball still held"
-                or "Shot input sent but ball still held after 1s")
+        if heldBall(character) then
+            track.LeftAt = nil
+            if self.Clock-track.Start > 1.0 then
+                self:FinishShotTrack(track.Kind == "Dunk" and "Dunk: no dunk state and ball still held"
+                    or "Shot input sent but ball still held after 1s")
+            end
             return
         end
+        -- Out of our hands: confirm it is a release, not a dribble reparent
+        -- (regained within 0.3 s) or a strip (an opponent now holds it).
+        track.LeftAt = track.LeftAt or self.Clock
+        local kind, who = self.ReadPossession and self:ReadPossession(character)
+        if kind == "Opponent" then
+            self:FinishShotTrack("Not a release: ball taken by "..tostring(who and who.Name or "opponent"))
+            return
+        end
+        if self.Clock-track.LeftAt < 0.15 then return end
+        track.Released, track.ReleaseTime = true, self.Clock
+        -- Bind to one ball: the loose ball nearest to us at release.
+        local best, bestDistance
+        for part in pairs(self:BallSet()) do
+            if part.Parent and not self:BallOwner(part) and root then
+                local d = (part.Position-root.Position).Magnitude
+                if not bestDistance or d < bestDistance then best, bestDistance = part, d end
+            end
+        end
+        track.Ball = best
+        if track.Kind == "Shot" then self.ShotsReleased = (self.ShotsReleased or 0)+1 end
         return
     end
     local goal = track.Goal
-    if goal and goal.Parent then
-        local nearest
-        for part in pairs(self:BallSet()) do
-            if part.Parent and not self:BallOwner(part) then
-                local d = (part.Position-goal.Position).Magnitude
-                if not nearest or d < nearest then nearest = d end
-            end
-        end
-        if nearest and nearest < track.MinDistance then track.MinDistance = nearest end
+    local ball = track.Ball
+    if goal and goal.Parent and ball and ball.Parent then
+        local d = (ball.Position-goal.Position).Magnitude
+        if d < track.MinDistance then track.MinDistance = d end
     end
     local elapsed = self.Clock-track.ReleaseTime
     local regained = heldBall(character) ~= nil
@@ -1415,13 +1715,140 @@ function Extension:TrackShot()
         local closest = track.MinDistance
         local text
         if track.Kind == "Dunk" then text = "Dunk released"
-        elseif closest == math.huge then text = "Shot released (ball flight not visible)"
+        elseif closest == math.huge then text = "Shot released (ball flight not tracked)"
         elseif closest <= 3.5 then
             self.ShotsNearRim = (self.ShotsNearRim or 0)+1
-            text = string.format("Shot released; reached rim (%.1f studs)", closest)
+            text = string.format("Shot released; passed %.1f studs from rim (score not verifiable)", closest)
         else text = string.format("Shot released; closest %.1f studs from rim", closest) end
         self:FinishShotTrack(text)
     end
+end
+
+-- Basket-aware defense for Auto-play. Hoopz half-court play attacks one hoop;
+-- the defended basket is the goal on the attacker's court (nearest to the
+-- attacker, kept for the possession), never simply the hoop nearest to us.
+local function dflat(v) return Extension.Environment.Vector3.new(v.X, 0, v.Z) end
+local function dunit(v)
+    local m = v.Magnitude
+    if m < 0.001 then return Extension.Environment.Vector3.new(1, 0, 0) end
+    return v / m
+end
+local function dsegment(point, a, b)
+    local d = dflat(b-a)
+    local t = math.max(0, math.min(1, dflat(point-a):Dot(d) / math.max(0.001, d:Dot(d))))
+    return dflat(point-(a+d*t)).Magnitude
+end
+function Extension:DefendedGoal(attackerRoot)
+    local current = self.DefenseGoal
+    local best, bestDistance
+    for _, goal in ipairs(self:Goals()) do
+        if goal.Parent and math.abs(goal.Position.Y-attackerRoot.Position.Y) < 30 then
+            local d = dflat(goal.Position-attackerRoot.Position).Magnitude
+            if d <= 150 and (not bestDistance or d < bestDistance) then best, bestDistance = goal, d end
+        end
+    end
+    if current and current.Parent and best ~= current then
+        local d = dflat(current.Position-attackerRoot.Position).Magnitude
+        -- Sticky: only switch when the other hoop is clearly the attacker's.
+        if d <= 150 and d < bestDistance+25 then return current end
+    end
+    if best ~= current then
+        self.DefenseGoal = best
+        if best and self.Log then self:Log("defense", "defending basket "..tostring(best.Name)) end
+    end
+    return best
+end
+function Extension:AttackerRead(attacker, root)
+    for _, read in ipairs(self.OpponentReads or {}) do
+        if read.Player == attacker then return read end
+    end
+    return nil
+end
+-- One defensive decision. Returns the movement target (or nil to hold) and
+-- the reason, plus sets DefenseFacing toward the attacker.
+function Extension:DefenseStep(character, humanoid, root, attacker)
+    local _, attackerHumanoid, attackerRoot = characterParts(attacker)
+    if not attackerRoot then self:StopAutoMove(); self.DefenseIntent = "No live attacker"; return nil end
+    self.OpponentReads = self:ReadOpponents(root)
+    local goal = self:DefendedGoal(attackerRoot)
+    if not goal then self:StopAutoMove(); self.DefenseIntent = "No basket on the attacker's court"; return nil end
+    local read = self:AttackerRead(attacker, root)
+    local velocity = read and read.Velocity or dflat(attackerRoot.AssemblyLinearVelocity)
+    if velocity.Magnitude > 32 then velocity = dunit(velocity)*32 end
+    local here = root.Position
+    local gap = dflat(attackerRoot.Position-here).Magnitude
+    local lead = math.max(0.2, math.min(0.5, 0.2+gap/50))
+    local rim = self.Environment.Vector3.new(goal.Position.X, here.Y, goal.Position.Z)
+    -- Lead drives toward the rim fully; side-to-side crossovers only a
+    -- little, enough to offset our slower lateral speed without overshooting.
+    local axis = dunit(dflat(rim-attackerRoot.Position))
+    local driveVelocity = axis*math.max(0, velocity:Dot(axis))
+    local sideVelocity = velocity-axis*velocity:Dot(axis)
+    local predicted = attackerRoot.Position+driveVelocity*lead+sideVelocity*0.3
+    local attackerFlat = self.Environment.Vector3.new(predicted.X, here.Y, predicted.Z)
+    local toRim = dflat(rim-attackerFlat)
+    local rimDistance = toRim.Magnitude
+    local direction = dunit(toRim)
+    local lateral = self.Environment.Vector3.new(-direction.Z, 0, direction.X)
+    local driveSpeed = velocity:Dot(direction)
+    local shooterRange = (goal.Position-attackerRoot.Position).Magnitude <= 80
+    -- How far along the attacker->rim axis we are; <= 0.5 means level/behind.
+    local along = dflat(here-attackerFlat):Dot(direction)
+    local mode, spacing
+    if along < 0.5 and gap < 20 then
+        mode = "Recover"
+        spacing = math.min(rimDistance*0.6, 9)
+        -- Beaten on a drive close to the basket: sprint to the rim itself
+        -- instead of chasing the attacker's back.
+        if rimDistance < 30 and driveSpeed > 4 then spacing = math.max(spacing, rimDistance-3) end
+    elseif rimDistance < 22 or (driveSpeed > 8 and rimDistance < 60) then
+        mode = "Protect rim"
+        spacing = math.max(2.5, math.min(6, rimDistance*0.35))
+    elseif shooterRange then
+        mode = "Close out"
+        spacing = 4
+    else
+        mode = "Contain"
+        spacing = 6
+    end
+    spacing = math.min(spacing, math.max(0.5, rimDistance-1))
+    local target = attackerFlat+direction*spacing
+    -- Recover around the attacker, not through him.
+    if mode == "Recover" and dsegment(attackerFlat, here, target) < 2.5 then
+        local side = dflat(here-attackerFlat):Dot(lateral) >= 0 and 1 or -1
+        target = attackerFlat+lateral*side*4+direction*2
+    end
+    -- Never drift farther from the basket than the attacker (out of bounds /
+    -- onto another court), and keep on supported floor.
+    if dflat(target-rim).Magnitude > dflat(attackerFlat-rim).Magnitude+2 then
+        target = attackerFlat+direction*math.max(spacing, 2)
+    end
+    local params = self:MakeRayParams()
+    if params and not self:HasFloor(target, params) then
+        target = self.LastDefenseTarget or here
+    end
+    self.LastDefenseTarget = target
+    self.DefenseFacing = dunit(dflat(attackerRoot.Position-here))
+    self.DefenseGoalPosition = rim
+    -- Contest only real shots/dunks or a rising jump close in front.
+    local attackerAction = self.GameAction and self:GameAction(attacker.Character)
+    local rising = attackerHumanoid.FloorMaterial == self.Environment.Enum.Material.Air
+        and attackerRoot.AssemblyLinearVelocity.Y > 8
+    if (attackerAction == "Shooting" or attackerAction == "Dunking" or rising) and gap < 9 and along > -1
+        and humanoid.FloorMaterial ~= self.Environment.Enum.Material.Air and self.Clock-self.LastJump >= 0.6 then
+        humanoid.Jump, self.LastJump = true, self.Clock
+        self.ContestCount = (self.ContestCount or 0)+1
+        if self.Log then self:Log("defense", "contest jump ("..tostring(attackerAction or "rising")..")") end
+    end
+    self.DefenseMode = mode
+    if dflat(target-here).Magnitude < 1 then
+        self:StopAutoMove()
+        self.DefenseIntent = mode..": holding good basket-side spot"
+        return nil
+    end
+    self.AutoMovePoint = target
+    self.DefenseIntent = mode
+    return target
 end
 
 prototypes["root"]={};prototypeNames[prototypes["root"]]="root"

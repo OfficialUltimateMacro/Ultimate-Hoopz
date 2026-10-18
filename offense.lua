@@ -124,6 +124,7 @@ function Extension:ResetOffense()
     self.DunkMode, self.DriveUntil, self.DunkingUntil = nil, nil, nil
     self.Plan, self.EscapeCount, self.NextEscape, self.PossessionStart = nil, 0, nil, nil
     self.FakeShotStart, self.ForceShot, self.AttackMode = nil, nil, nil
+    self.FreezeSince, self.FreezeLogged = nil, nil
 end
 function Extension:ReleaseJumpKey()
     if not self.Environment then return end
@@ -203,6 +204,19 @@ function Extension:PulseKey(name, hold, cooldown, force)
     return true
 end
 function Extension:PulseDribble(name)
+    -- Wait (bounded 0.6 s) while Hoopz reports an action from a previous move.
+    local action = gameAction(self.Player and self.Player.Character)
+    if action ~= nil and action ~= "" then
+        if self.ActionSeenValue ~= action then
+            self.ActionSeenValue, self.ActionSeenSince = action, self.Clock
+            self.ActionsSeen = self.ActionsSeen or {}
+            if not self.ActionsSeen[action] then
+                self.ActionsSeen[action] = true
+                if self.Log then self:Log("action", "Hoopz Action value seen: "..tostring(action)) end
+            end
+        end
+        if self.Clock-(self.ActionSeenSince or self.Clock) < 0.6 then return false end
+    else self.ActionSeenValue = nil end
     return self:PulseKey(name, 0.04, name == "R" and 0.4 or 0.2)
 end
 
@@ -285,6 +299,7 @@ function Extension:ShotLaneClear(root, goal, params)
     if not params or not goal then return false end
     -- Conservative straight line to basket; this is not a ballistic simulation.
     local hit = self.Environment.workspace:Raycast(root.Position, goal.Position-root.Position, params)
+    self.LastLaneHit = hit
     if hit==nil or hit.Instance==goal then return true end
     -- The goal's rim/backboard can intercept a straight diagnostic ray even
     -- though the recovered shot follows an arc into that same basket.
@@ -297,8 +312,13 @@ function Extension:CanTakeShot(root)
     if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
     if not self:InShotRange(root) then self.ShotBlockReason="Outside shooting range";return false end
     if not self:ShotLaneClear(root,goal,self:MakeRayParams()) then
-        if not self.ForceShot then self.ShotBlockReason="Shot line blocked";return false end
-        self.ShotBlockReason="Line check failed repeatedly: shooting anyway"
+        -- After 8 s, a straight-line miss that ends near the hoop (rim/net
+        -- structure) no longer blocks; a real wall in between still does.
+        local hit=self.LastLaneHit
+        if not (self.ForceShot and hit and hit.Position and (hit.Position-goal.Position).Magnitude<=15) then
+            self.ShotBlockReason="Shot line blocked";return false
+        end
+        self.ShotBlockReason="Line hit near the hoop for 8s: shooting anyway"
         return true
     end
     -- Defenders never veto the shot: contested shots go up immediately.
@@ -410,6 +430,23 @@ function Extension:ReleaseAutoFacing()
     end
     self.AutoFacingHumanoid,self.SavedAutoRotate=nil,nil
     self.FaceYaw,self.CameraYaw,self.CameraDistance,self.CameraCurrentDistance=nil,nil,nil,nil
+    self.CameraPitch,self.CameraFirstPerson=nil,nil
+end
+-- A camera hit only counts as a wall when it is real, visible, anchored
+-- geometry: not the dribbled ball, hitboxes, effects or invisible barriers.
+function Extension:IsCameraBlocker(hit)
+    local part = hit and hit.Instance
+    if not part then return false end
+    local ok, blocks = pcall(function()
+        if part.Name == "Ball" or part.Name == "Basketball" then return false end
+        if part.Transparency > 0.6 or part.Anchored == false then return false end
+        local size = part.Size
+        if math.max(size.X, size.Y, size.Z) < 4 then return false end
+        if part.FindFirstAncestor and part:FindFirstAncestor("Hitboxes") then return false end
+        return true
+    end)
+    if not ok then return true end
+    return blocks
 end
 local atan2 = math.atan2 or math.atan
 local function yawOf(d) return atan2(d.X, d.Z) end
@@ -444,6 +481,7 @@ function Extension:DesiredFacing(root)
     local goalDir=toGoal and toGoal.Magnitude>0.5 and unit(toGoal)
     local move=self.AutoMovePoint and flat(self.AutoMovePoint-root.Position)
     local moveDir=move and move.Magnitude>0.6 and unit(move)
+    if self.State=="Opponent" then return self.DefenseFacing end
     local plan=self.Plan
     if plan and plan.Facing then return plan.Facing end
     if not moveDir then return goalDir end
@@ -460,14 +498,17 @@ function Extension:UpdateAutoFacing(dt)
     if not env or not env.CFrame or not self.Alive or not self.Settings.AutoPlay or not self.Settings.AutoPlayCamera
         or self.Shooting or (self.AimDepth or 0)>0 or self:IsManual() then self:ReleaseAutoFacing();return end
     local character,humanoid,root=characterParts(self.Player)
-    if not humanoid or not heldBall(character) then self:ReleaseAutoFacing();return end
+    local defending=self.State=="Opponent" and self.DefenseFacing~=nil
+    local offense=(self.State=="Own" or self.State==nil) and heldBall(character)
+    if not humanoid or not (offense or defending) then self:ReleaseAutoFacing();return end
     local action=gameAction(character)
     if action=="Shooting" or action=="Dunking" then self:ReleaseAutoFacing();return end
-    local activeCamera=env.workspace.CurrentCamera
-    if activeCamera and env.Enum.CameraType and activeCamera.CameraType==env.Enum.CameraType.Scriptable then
+    local camera=env.workspace.CurrentCamera
+    if camera and env.Enum.CameraType and camera.CameraType==env.Enum.CameraType.Scriptable then
         self:ReleaseAutoFacing();return
     end
     if self:CameraIntervention() then self.CameraPauseUntil=self.Clock+1 end
+    -- A camera pause only pauses camera/body assistance; movement continues.
     if self.CameraPauseUntil and self.Clock<self.CameraPauseUntil then self:ReleaseAutoFacing();return end
     local face=self:DesiredFacing(root)
     if not face then self:ReleaseAutoFacing();return end
@@ -480,32 +521,45 @@ function Extension:UpdateAutoFacing(dt)
     self.FaceYaw=approachYaw(self.FaceYaw,yawOf(face),12,9,dt)
     local bodyDir=env.Vector3.new(math.sin(self.FaceYaw),0,math.cos(self.FaceYaw))
     root.CFrame=env.CFrame.lookAt(root.Position,root.Position+bodyDir)
-    local camera=env.workspace.CurrentCamera
-    if not camera or camera.CameraSubject~=humanoid then return end
-    -- Camera looks up the court toward the basket; when the body has turned
-    -- far away (retreat/escape) it follows the body instead.
-    local goal=self.OffenseGoal
-    local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
-    local viewDir=bodyDir
-    if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(toGoal) end
+    if not camera or camera.CameraSubject~=humanoid then self.CameraYaw,self.CameraDistance=nil,nil;return end
+    -- Camera orbits the same focus Roblox uses, at YOUR current zoom radius,
+    -- so handing control back to the default camera never jumps.
+    local focus=root.Position+env.Vector3.new(0,1.5,0)
     if not self.CameraDistance then
-        local current=(camera.CFrame.Position-root.Position).Magnitude
-        self.CameraDistance=math.max(14,math.min(22,current==current and current or 16))
+        local offset=camera.CFrame.Position-focus
+        local radius=offset.Magnitude
+        if radius~=radius or radius<2 then self.CameraFirstPerson=true end
+        self.CameraDistance=math.max(8,math.min(40,radius==radius and radius or 14))
         self.CameraCurrentDistance=self.CameraDistance
+        self.CameraPitch=math.asin(math.max(-0.99,math.min(0.99,offset.Y/math.max(radius,0.001))))
         local look=camera.CFrame.LookVector
         if look and flat(look).Magnitude>0.1 then self.CameraYaw=yawOf(look) end
     end
+    if self.CameraFirstPerson then return end
+    local viewDir
+    if defending then
+        -- Defense: keep the attacker in frame from the basket side.
+        viewDir=self.DefenseFacing
+    else
+        local goal=self.OffenseGoal
+        local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
+        viewDir=bodyDir
+        if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(toGoal) end
+    end
     self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),3,2.6,dt)
+    -- Ease pitch into a court-reading band, never into the floor or overhead.
+    local wantPitch=math.max(0.28,math.min(0.6,self.CameraPitch or 0.36))
+    self.CameraPitch=(self.CameraPitch or wantPitch)+(wantPitch-(self.CameraPitch or wantPitch))*(1-math.exp(-2*math.min(dt,0.1)))
     local camDir=env.Vector3.new(math.sin(self.CameraYaw),0,math.cos(self.CameraYaw))
-    local focus=root.Position+env.Vector3.new(0,2.5,0)+camDir*4
-    local pitch=0.36
+    local back=camDir*(-math.cos(self.CameraPitch))+env.Vector3.new(0,math.sin(self.CameraPitch),0)
     local wanted=self.CameraDistance
-    local back=camDir*(-math.cos(pitch))+env.Vector3.new(0,math.sin(pitch),0)
     local params=self:MakeRayParams()
     local hit=params and env.workspace:Raycast(focus,back*wanted,params)
-    if hit and hit.Position then wanted=math.max(6,(hit.Position-focus).Magnitude-0.8) end
+    if hit and hit.Position and self:IsCameraBlocker(hit) then
+        wanted=math.max(4,(hit.Position-focus).Magnitude-0.8)
+    end
     local current=self.CameraCurrentDistance or wanted
-    local rate=wanted<current and 20 or 2.5
+    local rate=wanted<current and 10 or 2.5
     current=current+(wanted-current)*(1-math.exp(-rate*math.min(dt,0.1)))
     self.CameraCurrentDistance=current
     camera.CFrame=env.CFrame.lookAt(focus+back*current,focus)
@@ -516,7 +570,7 @@ end
 ---------------------------------------------------------------------------
 local VARIETY = {"C","H","F","G","V","B","R"}
 function Extension:ChooseDribble(root, point, opponents, ball)
-    if not point or (self.Plan and self.Clock < self.Plan.Until) then return end
+    if not point or not ball or (self.Plan and self.Clock < self.Plan.Until) then return end
     local threat, nearest = nil, 24
     for _, opponent in ipairs(opponents) do
         local d = flat(opponent.Position-root.Position).Magnitude
@@ -567,6 +621,15 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         local reached = plan.Point and flat(plan.Point-root.Position).Magnitude < 1
         if now < plan.Until and not reached then return plan end
         self.Plan = nil
+        if plan.Kind == "escape" then
+            -- Completion check: did the escape create separation?
+            local still = false
+            for _, opponent in ipairs(opponents) do
+                if flat(opponent.Position-root.Position).Magnitude < 4 then still = true end
+            end
+            self.EscapeFailed = self.EscapeFailed or {}
+            self.EscapeFailed[plan.Side] = still and now or nil
+        end
         if plan.Kind == "hesitate" then self.NextEscape = now else self.NextEscape = now+0.7 end
         plan = nil
     end
@@ -590,6 +653,9 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         preferred = hand ~= 0 and (hand > 0 and 1 or -1) or -(self.LastEscapeSide or 1)
     else preferred = defenderSide > 0 and -1 or 1 end
     local closingSpeed = -flat(defender.Position-root.Position):Dot(defender.Velocity)/math.max(gap,0.01)
+    -- Do not repeat a side that just failed to create space.
+    local failed = self.EscapeFailed or {}
+    if failed[preferred] and now-failed[preferred] < 2 then preferred = -preferred end
     local chosen
     for _, side in ipairs({preferred, -preferred}) do
         local point = root.Position+lateral*side*7+forward*3
@@ -636,6 +702,13 @@ function Extension:OffenseStep(character, humanoid, root)
     self.PossessionStart = self.PossessionStart or now
     local held = now-self.PossessionStart
     local action = gameAction(character)
+    if action == "Shooting" or action == "Dunking" then
+        self.FreezeSince = self.FreezeSince or now
+        if now-self.FreezeSince > 2.5 then
+            if not self.FreezeLogged and self.Log then self:Log("watchdog", "Action "..tostring(action).." stale >2.5s: resuming") end
+            self.FreezeLogged = true; action = nil
+        end
+    else self.FreezeSince, self.FreezeLogged = nil, nil end
     if action == "Shooting" or action == "Dunking" or (self.DunkingUntil and now < self.DunkingUntil) then
         self:StopAutoMove();self:ReleaseDribbleKeys(true)
         self.AutoPlayStatus = "Game action in progress: "..tostring(action or "dunk")
@@ -776,6 +849,7 @@ function Extension:FinishShotTrack(text)
     if not track then return end
     if track.Action then text = text.." [Action="..tostring(track.Action).."]" end
     self.LastShotResult = text
+    if self.Log then self:Log(track.Kind == "Dunk" and "dunk" or "shot", text) end
     if track.Kind == "Dunk" then
         if track.Released or track.Action == "Dunking" then
             self.DunksStarted = (self.DunksStarted or 0)+1
@@ -790,29 +864,46 @@ function Extension:TrackShot()
     local track = self.ShotTrack
     if not track then return end
     local character = track.Character
+    if self.Player.Character ~= character then self:FinishShotTrack("Cancelled: character changed"); return end
     local action = gameAction(character)
     if action == "Shooting" or action == "Dunking" then track.Action = action end
+    local root = character and character:FindFirstChild("HumanoidRootPart")
     if not track.Released then
-        if not heldBall(character) then
-            track.Released, track.ReleaseTime = true, self.Clock
-            if track.Kind == "Shot" then self.ShotsReleased = (self.ShotsReleased or 0)+1 end
-        elseif self.Clock-track.Start > 1.0 then
-            self:FinishShotTrack(track.Kind == "Dunk" and "Dunk: no dunk state and ball still held"
-                or "Shot input sent but ball still held after 1s")
+        if heldBall(character) then
+            track.LeftAt = nil
+            if self.Clock-track.Start > 1.0 then
+                self:FinishShotTrack(track.Kind == "Dunk" and "Dunk: no dunk state and ball still held"
+                    or "Shot input sent but ball still held after 1s")
+            end
             return
         end
+        -- Out of our hands: confirm it is a release, not a dribble reparent
+        -- (regained within 0.3 s) or a strip (an opponent now holds it).
+        track.LeftAt = track.LeftAt or self.Clock
+        local kind, who = self.ReadPossession and self:ReadPossession(character)
+        if kind == "Opponent" then
+            self:FinishShotTrack("Not a release: ball taken by "..tostring(who and who.Name or "opponent"))
+            return
+        end
+        if self.Clock-track.LeftAt < 0.15 then return end
+        track.Released, track.ReleaseTime = true, self.Clock
+        -- Bind to one ball: the loose ball nearest to us at release.
+        local best, bestDistance
+        for part in pairs(self:BallSet()) do
+            if part.Parent and not self:BallOwner(part) and root then
+                local d = (part.Position-root.Position).Magnitude
+                if not bestDistance or d < bestDistance then best, bestDistance = part, d end
+            end
+        end
+        track.Ball = best
+        if track.Kind == "Shot" then self.ShotsReleased = (self.ShotsReleased or 0)+1 end
         return
     end
     local goal = track.Goal
-    if goal and goal.Parent then
-        local nearest
-        for part in pairs(self:BallSet()) do
-            if part.Parent and not self:BallOwner(part) then
-                local d = (part.Position-goal.Position).Magnitude
-                if not nearest or d < nearest then nearest = d end
-            end
-        end
-        if nearest and nearest < track.MinDistance then track.MinDistance = nearest end
+    local ball = track.Ball
+    if goal and goal.Parent and ball and ball.Parent then
+        local d = (ball.Position-goal.Position).Magnitude
+        if d < track.MinDistance then track.MinDistance = d end
     end
     local elapsed = self.Clock-track.ReleaseTime
     local regained = heldBall(character) ~= nil
@@ -820,10 +911,10 @@ function Extension:TrackShot()
         local closest = track.MinDistance
         local text
         if track.Kind == "Dunk" then text = "Dunk released"
-        elseif closest == math.huge then text = "Shot released (ball flight not visible)"
+        elseif closest == math.huge then text = "Shot released (ball flight not tracked)"
         elseif closest <= 3.5 then
             self.ShotsNearRim = (self.ShotsNearRim or 0)+1
-            text = string.format("Shot released; reached rim (%.1f studs)", closest)
+            text = string.format("Shot released; passed %.1f studs from rim (score not verifiable)", closest)
         else text = string.format("Shot released; closest %.1f studs from rim", closest) end
         self:FinishShotTrack(text)
     end

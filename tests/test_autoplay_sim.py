@@ -15,16 +15,19 @@ local s={AutoGuard=true,AutoGuardKeybind='L',Aimbot=true,AimbotType='Low',BallMa
 e:Install(F.env,s)
 local root,own,oh=F.root,F.own,F.oh
 local shots,dunkKeys=0,0
+local flights={}
 local release=true
 local function giveBall()local b=F.part(root.Position,'Basketball');b.Owner=own.Character;own.Character.ball=b;return b end
 e.AimAction=function()
  shots=shots+1
  if release then
   own.Character.ball=nil
-  local target=e:NearestGoal(root) or F.goal;local flying=F.part(target.Position+v(0.5,0,0.5),'Basketball');F.balls[#F.balls+1]=flying;F.world.DescendantAdded:Fire(flying)
+  local target=e:NearestGoal(root) or F.goal;local flying=F.part(root.Position+v(0,3,0),'Basketball');F.balls[#F.balls+1]=flying;F.world.DescendantAdded:Fire(flying)
+  flights[#flights+1]={part=flying,target=target.Position+v(0.5,0,0.5),t=0}
  end
 end
-local function frames(n,each)for i=1,n do if each and each(i) then return i end;F.step(e,1/60) end;return nil end
+local function fly()for _,f in ipairs(flights)do if f.t<1 then f.t=math.min(1,f.t+1/60/0.8);local a=f.part.Position;f.part.Position=a+(f.target-a)*math.min(1,f.t*1.0) end end end
+local function frames(n,each)for i=1,n do if each and each(i) then return i end;fly();F.step(e,1/60) end;return nil end
 local function restart(pos)
  e:SetAutoPlay(false);F.queue={};root.Position=pos;root.AssemblyLinearVelocity=v();oh.point=nil;oh.FloorMaterial='Ground'
  shots=0;e.LastShot=-100;giveBall();e:SetAutoPlay(true)
@@ -61,7 +64,7 @@ out[#out+1]=string.format('second-nearest shot after %.2fs',t/60)
 -- 4. Shot verification: release and rim pass are recorded.
 frames(200)
 s.AutoPlayBasket='Nearest';F.farGoal.Position=v(260,12,0)
-assert(e.ShotsReleased>=1 and e.ShotsNearRim>=1 and e.LastShotResult:find('reached rim'),'release + rim verification: '..tostring(e.LastShotResult))
+assert(e.ShotsReleased>=1 and e.ShotsNearRim>=1 and e.LastShotResult:find('passed'),'release + rim verification: '..tostring(e.LastShotResult))
 release=false;restart(v(110,3,0));frames(60*10,function()return shots>0 end);frames(150)
 assert(e.LastShotResult:find('still held'),'unreleased shot reported: '..tostring(e.LastShotResult))
 release=true

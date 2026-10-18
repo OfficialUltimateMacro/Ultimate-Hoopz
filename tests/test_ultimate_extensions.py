@@ -64,7 +64,7 @@ s.AutoGuard=false;ah.Jumping:Fire(true);assert(not oh.Jump);s.AutoGuard=true
 local old=e.JumpConnection;a.Character=select(1,player()).Character;e:SelectTarget(a);assert(not old.Connected and e.TargetCharacter==a.Character,'respawn rebind')
 e:ClearTarget();selected=nil
 s.Aimbot=false;s.AutoGuard=false;s.BallMagnet=false;s.BallReach=false
-e:SetAutoPlay(true);assert(s.Aimbot and s.AutoGuard and s.BallMagnet and s.BallReach)
+e:SetAutoPlay(true);assert(s.Aimbot and not s.AutoGuard and s.BallMagnet and s.BallReach,'Auto-play turns Auto Guard off (it defends itself)')
 e.AutoMovePoint=vec(8);rs.bindings[e.RenderName]();assert(oh.moves==1,'render uses rebound settings')
 input.down.W=true;local n=oh.moves;rs.bindings[e.RenderName]();assert(oh.moves==n);e:AutoPlayStep(own.Character,oh,orr);assert(e.AutoPlayStatus=='Paused: manual input' and not e.AutoMovePoint)
 input.down.W=nil;e.Clock=4;e:SetAutoPlay(false);assert(not s.Aimbot and not s.AutoGuard and not s.BallMagnet and not s.BallReach)

@@ -7,7 +7,7 @@
   "scheduled_gameplay_tasks_tested": false,
   "live_Hoopz_tested": false,
   "Hoopz_mock_startup": "pass",
-  "Hoopz_mock_actions": 2474,
+  "Hoopz_mock_actions": 2509,
   "requested_defaults_verified": {
     "guardKey": "Enum.KeyCode.L",
     "magnet": false,
@@ -107,5 +107,44 @@
     },
     "note": "previous->current; partly behavioral; mock only"
   },
-  "shot_verification": "Action attribute, release within 1s, closest rim pass; offline only"
+  "shot_verification": "Action attribute, release within 1s, closest rim pass; offline only",
+  "video_regressions": {
+    "source": "2026-10-17 23-00-29.mp4",
+    "current": "18/18",
+    "published_round2_build": "9/18",
+    "old_failures": [
+      "S1 stale container",
+      "S2 facing",
+      "S3 turnover reaction",
+      "S3 baseline drive",
+      "S5 other-court hoop",
+      "S8 death during shot",
+      "S9 stale Action",
+      "S12 camera close-up (3.5 studs)",
+      "S13 stall watchdog"
+    ],
+    "tradeoff": "S4 rapid crossovers: old follow-guard 0.84 studs lateral error, new 3.0 (passes 3.5 budget)"
+  },
+  "performance_mock_10s_round3": {
+    "defending": {
+      "plan_ms": 11.3,
+      "render_ms": 17.7,
+      "MoveTo": 144,
+      "Raycast": 758,
+      "RaycastParams": 10,
+      "mem_kb_growth": 0.2
+    },
+    "holding_ball": {
+      "plan_ms": 17.0,
+      "render_ms": 36.2,
+      "Raycast": 1285,
+      "MoveTo": 43
+    },
+    "seeking_ball": {
+      "plan_ms": 7.7,
+      "render_ms": 4.2,
+      "GetDescendants": 1
+    },
+    "note": "mock Lua time; previous build idles while defending so its defense cost is not comparable"
+  }
 }
