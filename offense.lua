@@ -28,6 +28,45 @@ function Extension:ResetOffense()
     self.OffenseGoal, self.OffenseCharacter, self.ShotSpot, self.SpotScore = nil, nil, nil, nil
     self.OpenSince, self.ProgressPosition, self.ProgressTime, self.StuckUntil = nil, nil, nil, nil
     self.LastPlan = nil
+    self.RouteDirection, self.RouteHoldUntil = nil, nil
+end
+function Extension:ReleaseJumpKey()
+    local key = self.Environment.Enum.KeyCode.Space
+    if self.DribbleKeys and self.DribbleKeys[key] then
+        if self.VirtualInput then pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,false,key,false,self.Environment.game) end
+        self.DribbleKeys[key] = nil
+    end
+end
+function Extension:RequestAutoJump(humanoid, root, valid)
+    humanoid.Jump = true
+    local states = self.Environment.Enum.HumanoidStateType
+    if states and type(humanoid.ChangeState) == "function" then
+        pcall(humanoid.ChangeState,humanoid,states.Jumping)
+    end
+    -- Use the game's normal jump input too; some character controllers consume
+    -- or overwrite the Jump property before the next simulation step.
+    if not self.Input:IsKeyDown(self.Environment.Enum.KeyCode.Space) then
+        if not self.VirtualInput then
+            local ok, service = pcall(self.Environment.game.GetService,self.Environment.game,"VirtualInputManager")
+            if ok then self.VirtualInput=service end
+        end
+        if self.VirtualInput then
+            local key = self.Environment.Enum.KeyCode.Space
+            self.DribbleKeys = self.DribbleKeys or {}
+            self.DribbleKeys[key] = self.Clock+0.08
+            pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,true,key,false,self.Environment.game)
+            self.Environment.task.delay(0.08,function() self:ReleaseJumpKey() end)
+        end
+    end
+    for _=1,12 do
+        if not valid() then self:ReleaseJumpKey();return false end
+        if humanoid.FloorMaterial == self.Environment.Enum.Material.Air and root.AssemblyLinearVelocity.Y > 1 then
+            self:ReleaseJumpKey();return true
+        end
+        self.Environment.task.wait(0.025)
+    end
+    self:ReleaseJumpKey()
+    return false
 end
 function Extension:ReadOpponents(root)
     local result = {}
@@ -146,18 +185,35 @@ function Extension:SteerTo(root, destination, opponents)
             for _, opponent in ipairs(opponents) do
                 cost = cost + math.max(0,5-segmentDistance(opponent.Predicted,root.Position,point))*5
             end
+            -- Retain a clear exit briefly instead of changing left/right every
+            -- scan. Prefer separation from the defender's predicted intercept.
+            local direction = unit(point-root.Position)
+            if self.RouteDirection and self.RouteHoldUntil and self.Clock < self.RouteHoldUntil then
+                cost = cost + (1-direction:Dot(self.RouteDirection))*5
+            end
+            for _, opponent in ipairs(opponents) do
+                if flat(opponent.Position-root.Position).Magnitude < 14 then
+                    cost = cost + math.max(0,8-flat(point-opponent.Predicted).Magnitude)*2
+                end
+            end
             if self.StuckUntil and self.Clock < self.StuckUntil then
                 cost = cost + (degrees == 0 and 30 or 0) + (degrees*self.EscapeSide < 0 and 8 or 0)
             end
             if cost < score then best,score=point,cost end
         end
     end
+    if best then
+        if not self.RouteHoldUntil or self.Clock >= self.RouteHoldUntil then self.RouteHoldUntil=self.Clock+0.6 end
+        self.RouteDirection=unit(best-root.Position)
+    end
     return best
 end
 function Extension:PulseDribble(name)
-    if not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.9
+    if not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.35
         or self:IsManual() or self.Shooting then return false end
     local key = self.Environment.Enum.KeyCode[name]
+    self.MoveCooldowns = self.MoveCooldowns or {}
+    if self.Clock-(self.MoveCooldowns[name] or -100) < (name == "R" and 1.05 or 0.65) then return false end
     if key == self.Settings.AutoGuardKeybind then return false end
     if self.Input:IsKeyDown(key) then return false end
     if not self.VirtualInput then
@@ -170,6 +226,7 @@ function Extension:PulseDribble(name)
     local ok = pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,true,key,false,self.Environment.game)
     if not ok then self:ReleaseDribbleKeys(true);self.DribbleStatus="Input unavailable";return false end
     self.LastDribble,self.DribbleStatus = self.Clock,name
+    self.MoveCooldowns[name] = self.Clock
     -- Release independently of the planner too, even if its heartbeat stops.
     self.Environment.task.delay(0.08,function()
         if self.DribbleKeys[key] then
@@ -181,7 +238,7 @@ function Extension:PulseDribble(name)
 end
 function Extension:ChooseDribble(root, point, opponents, ball)
     if not point then return end
-    local threat, nearest = nil, 15
+    local threat, nearest = nil, 18
     for _, opponent in ipairs(opponents) do
         local d = flat(opponent.Position-root.Position).Magnitude
         if d < nearest then threat,nearest=opponent,d end
@@ -192,7 +249,8 @@ function Extension:ChooseDribble(root, point, opponents, ball)
     local threatSide = flat(threat.Predicted-root.Position):Dot(right)
     local closing = flat(threat.Position-root.Position):Dot(threat.Velocity) < -6
     local name
-    if threat.Airborne then name="R" -- fake out while a close defender is committed
+    local fakeReady = self.Clock-((self.MoveCooldowns or {}).R or -100) >= 1.05
+    if fakeReady and (threat.Airborne or nearest < 16) then name="R"
     elseif closing and nearest < 8 then name=routeSide < 0 and "V" or "B"
     elseif nearest < 7 and math.abs(threatSide) < 2 then name="C"
     else
@@ -202,6 +260,7 @@ function Extension:ChooseDribble(root, point, opponents, ball)
             if routeSide > 1 and hand < -0.2 then name="F"
             elseif routeSide < -1 and hand > 0.2 then name="G" end
         elseif threatSide*routeSide < 0 then name="H" end
+        if not name and nearest < 16 then name=math.abs(routeSide)>2 and "H" or "C" end
     end
     if name then self:PulseDribble(name) end
 end

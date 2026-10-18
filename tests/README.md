@@ -7,3 +7,5 @@ The offense suite simulates a flat world, obstacles, a ledge, replicated player 
 The workspace also contains work/test_ultimate_preferences.py for full recovered Hoopz startup using the isolated original interpreter fixture. That test and its historical decoder dependencies are not copied here.
 
 Run `python tests/test_player_collisions.py` for nearby torso-only contact changes, radius/death/respawn/disable/unload restoration and external-value preservation. This mock checks properties and cleanup, not actual physics or server-approved player pushing.
+
+Run `python tests/test_auto_jump.py` for native Space/state jump requests, confirmed takeoff before shooting, duplicate JumpRequest suppression, timeout and cancellation, key release and physical Space preservation. Offense tests also cover close-grounded-defender R followed by another move within0.4s and R again after1.1s. Extension tests cover default J, UI synchronization and processed/typing input.

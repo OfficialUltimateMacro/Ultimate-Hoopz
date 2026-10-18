@@ -73,6 +73,12 @@ end
 function Extension:GuardKey(input, processed, captures)
     if not self.Alive or processed or self.Input:GetFocusedTextBox() then return end
     local settings = captures[0] or self.Settings
+    if settings and settings.AutoPlayKeybind and input.KeyCode == settings.AutoPlayKeybind
+        and input.KeyCode ~= settings.AutoGuardKeybind then
+        self.Settings, self.InputCaptures = settings, captures
+        self:SetAutoPlay(not settings.AutoPlay)
+        return
+    end
     if not settings or input.KeyCode ~= settings.AutoGuardKeybind then return end
     self.Settings, self.InputCaptures = settings, captures
     local enabled = not settings.AutoGuard
@@ -97,6 +103,9 @@ function Extension:SetAutoPlay(enabled)
     enabled = enabled == true
     if self.Settings.AutoPlay == enabled then return end
     self.Settings.AutoPlay = enabled
+    if self.AutoPlayToggle and type(self.AutoPlayToggle.SetValue) == "function" then
+        pcall(self.AutoPlayToggle.SetValue, enabled)
+    end
     if enabled then
         self.AutoPlaySnapshot = {}
         for _, name in ipairs({"Aimbot", "AutoGuard", "BallMagnet", "BallReach"}) do
@@ -166,13 +175,21 @@ function Extension:AutoPlayStep(character, humanoid, root)
         if self.Settings.Aimbot and self.AimAction and not self.Shooting and self.Clock - self.LastShot >= 1.25 and self:InShotRange(root) then
             self.Shooting, self.LastShot, self.AutoPlayStatus = true, self.Clock, "Shooting (experimental)"
             self.Environment.task.spawn(function()
-                if self.Alive and self.Settings.AutoPlay and not self:IsManual() and self.Player.Character == character
-                    and humanoid.Health > 0 and heldBall(character) and self:InShotRange(root)
-                    and (not self.CanTakeShot or self:CanTakeShot(root)) then
-                    humanoid.Jump = true
-                    local ok, message = pcall(self.AimAction)
-                    if not ok then self.AutoPlayStatus = "Shot unavailable: " .. tostring(message) end
+                local function valid()
+                    return self.Alive and self.Settings.AutoPlay and not self:IsManual() and self.Player.Character == character
+                        and humanoid.Health > 0 and heldBall(character) and self:InShotRange(root)
+                        and (not self.CanTakeShot or self:CanTakeShot(root))
                 end
+                local ok, message = pcall(function()
+                    if not valid() then return end
+                    self.AutoPlayStatus = "Jumping for shot"
+                    if self:RequestAutoJump(humanoid,root,valid) and valid() then
+                        self.AutoPlayStatus = "Shooting (experimental)"
+                        self.AimAction()
+                    elseif valid() then self.AutoPlayStatus = "Jump did not start: retrying" end
+                end)
+                if not ok then self.AutoPlayStatus = "Shot unavailable: " .. tostring(message) end
+                if self.ReleaseJumpKey then self:ReleaseJumpKey() end
                 self.Shooting = false
             end)
         end
@@ -217,6 +234,7 @@ function Extension:Install(environment, settings)
         settings.AutoPlayDribble = true
         settings.AutoPlayBasket = "Nearest"
         settings.PlayerCollisions = false
+        settings.AutoPlayKeybind = environment.Enum.KeyCode.J
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -231,6 +249,7 @@ function Extension:Install(environment, settings)
     settings.AutoPlayDribble = true
     settings.AutoPlayBasket = "Nearest"
     settings.PlayerCollisions = false
+    settings.AutoPlayKeybind = environment.Enum.KeyCode.J
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -252,8 +271,11 @@ function Extension:InstallControls(section)
     section:NewToggle({Title = "Match target jump", Default = true, Callback = function(value)
         self.Settings.AutoGuardJumpMatch = value
     end})
-    section:NewToggle({Title = "Auto-play (Experimental)", Default = false, Callback = function(value)
+    self.AutoPlayToggle = section:NewToggle({Title = "Auto-play", Default = false, Callback = function(value)
         self:SetAutoPlay(value)
+    end})
+    section:NewKeybind({Title = "Auto-play key", Default = self.Settings.AutoPlayKeybind, Hold = false, Callback = function(value)
+        self.Settings.AutoPlayKeybind = value
     end})
     section:NewToggle({Title = "Auto-play dribble", Default = true, Callback = function(value)
         self.Settings.AutoPlayDribble = value
@@ -263,7 +285,7 @@ function Extension:InstallControls(section)
         self.Settings.AutoPlayBasket = value
         if self.ResetOffense then self:ResetOffense() end
     end})
-    section:NewToggle({Title = "Player collisions (Experimental)", Default = false, Callback = function(value)
+    section:NewToggle({Title = "Player collisions", Default = false, Callback = function(value)
         self:SetPlayerCollisions(value)
     end})
 end
@@ -352,6 +374,12 @@ customizeClosure = function(name, original, environment, captures)
         end
     elseif name == "root.106" then
         Extension.AimAction = original
+        return function(...)
+            -- Synthetic Space also emits JumpRequest. The queued Auto-play shot
+            -- owns this attempt and calls original once AFTER takeoff.
+            if Extension.Shooting and Extension.Settings and Extension.Settings.AutoPlay then return end
+            return original(...)
+        end
     elseif name == "root.2138" then
         return function(...)
             if Extension.Installed and Extension:IsManual() then Extension:ClearTarget(); return end

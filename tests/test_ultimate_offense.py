@@ -43,6 +43,7 @@ local vim={};function vim:SendKeyEvent(down,key)keys[#keys+1]={down,key};if self
 local services={Players=players,UserInputService=input,RunService=runService,CollectionService=cs,VirtualInputManager=vim}
 local env={game={GetService=function(_,n)return assert(services[n],n)end},workspace=world,Vector3={new=v},RaycastParams={new=function()return{}end},Enum={KeyCode=setmetatable({},{__index=function(_,k)return k end}),Material={Air='Air',Water='Water'},RaycastFilterType={Exclude='Exclude'},RenderPriority={Camera={Value=200}}},task={spawn=function(f)queue[#queue+1]=f end,delay=function(_,f)queue[#queue+1]=f end}}
 local s={AutoGuard=true,AutoGuardKeybind='L',Aimbot=true,AimbotType='Low',BallMagnet=true,BallReach=true}
+env.task.wait=function()oh.FloorMaterial='Air';root.AssemblyLinearVelocity.Y=5 end
 e:Install(env,s);e:SetAutoPlay(true);own.Character.ball=part(root.Position+v(0,0,-1))
 assert(s.AutoPlayDribble and not e:NearestGoal({Position=v(1000,3,0)}),'goal distance bound')
 local reads=e:ReadOpponents(root);assert(#reads==0,'teammate and remote court excluded')
@@ -63,7 +64,7 @@ world.wall=false;world.edge=true
 point=e:SteerTo({Position=v(100,3,0)},v(100,3,20),{});assert(not point or point.Z<=1,'no unsupported floor route')
 world.edge=false;world.blockShot=true;assert(not e:CanTakeShot(root),'obstructed shot rejected');world.blockShot=false
 -- Screenshot control mapping and cooldown, possession hand, and pressure reads.
-e:ReleaseDribbleKeys(true);e.Clock=4;er.Position=root.Position+v(-10,0,0);own.Character.ball.Position=root.Position+v(0,0,-1)
+e:ReleaseDribbleKeys(true);e.Clock=4;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.Position=root.Position+v(-10,0,0);own.Character.ball.Position=root.Position+v(0,0,-1)
 e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball)
 assert(keys[#keys][1] and keys[#keys][2]=='F','left to right behind back')
 local count=#keys;e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(#keys==count,'dribble cooldown')
@@ -71,15 +72,22 @@ e:ReleaseDribbleKeys(true);assert(keys[#keys][1]==false and keys[#keys][2]=='F',
 e.Clock=5;own.Character.ball.Position=root.Position+v(0,0,1)
 e:ChooseDribble(root,root.Position+v(0,0,-8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='G' and keys[#keys][1])
 e:ReleaseDribbleKeys(true);e.Clock=6;eh.FloorMaterial='Air';e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R')
-e:ReleaseDribbleKeys(true);e.Clock=7;eh.FloorMaterial='Ground';er.Position=root.Position+v(-6,0,0);er.AssemblyLinearVelocity=v(3,0,0)
+e:ReleaseDribbleKeys(true);e.Clock=7;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;eh.FloorMaterial='Ground';er.Position=root.Position+v(-6,0,0);er.AssemblyLinearVelocity=v(3,0,0)
 e:ChooseDribble(root,root.Position+v(0,0,-8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='V')
-e:ReleaseDribbleKeys(true);e.Clock=8;er.AssemblyLinearVelocity=v();e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='C')
-e:ReleaseDribbleKeys(true);e.Clock=9;er.AssemblyLinearVelocity=v(3,0,0);e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='B')
-e:ReleaseDribbleKeys(true);e.Clock=10;er.Position=root.Position+v(-10,0,-3);er.AssemblyLinearVelocity=v()
+e:ReleaseDribbleKeys(true);e.Clock=8;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.AssemblyLinearVelocity=v();e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='C')
+e:ReleaseDribbleKeys(true);e.Clock=9;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.AssemblyLinearVelocity=v(3,0,0);e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='B')
+e:ReleaseDribbleKeys(true);e.Clock=10;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.Position=root.Position+v(-10,0,-3);er.AssemblyLinearVelocity=v()
 local model={};function model:IsA()return false end;function model:FindFirstChildWhichIsA()return nil end
 e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),model);assert(keys[#keys][2]=='H')
 e:ReleaseDribbleKeys(true);e.Clock=11;input.focus=true;count=#keys;assert(not e:PulseDribble('F') and #keys==count);input.focus=nil
 s.AutoGuardKeybind='F';assert(not e:PulseDribble('F'),'do not toggle guard on mapped key');s.AutoGuardKeybind='L'
+e.Clock=20;e.MoveCooldowns={};e.LastDribble=-100;e:ReleaseDribbleKeys(true)
+er.Position=root.Position+v(-10,0,0);er.AssemblyLinearVelocity=v();eh.FloorMaterial='Ground'
+e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R' and keys[#keys][1],'R used on grounded close defender')
+e.Clock=20.4;e:ReleaseDribbleKeys(true);own.Character.ball.Position=root.Position+v(0,0,-1)
+e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='F' and keys[#keys][1],'active move follows R in .4s')
+e.Clock=21.1;e:ReleaseDribbleKeys(true);e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R' and keys[#keys][1],'R repeats after cooldown')
+e:ReleaseDribbleKeys(true)
 -- Disabling between queueing and execution must prevent a shot.
 er.Position=v(200,3,200);root.Position=spot;e:ResetOffense();e.Clock=12;e:AutoPlayStep(own.Character,oh,root);e.Clock=12.3
 local shots=0;e.AimAction=function()shots=shots+1 end;e:AutoPlayStep(own.Character,oh,root);assert(e.Shooting)

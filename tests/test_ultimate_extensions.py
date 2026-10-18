@@ -8,6 +8,7 @@ local e=app.Extensions
 -- Isolate the previously shipped guard/pickup/shooting unit regressions.
 -- Full possession planning has a separate 3D world simulation suite.
 e.OffenseStep=nil;e.CanTakeShot=nil;e.SteerTo=nil
+e.RequestAutoJump=function(_,h)h.Jump=true;return true end
 local function signal()
  local s={listeners={}}
  function s:Connect(fn) local c={Connected=true};function c:Disconnect()self.Connected=false end;self.listeners[#self.listeners+1]={fn,c};return c end
@@ -40,6 +41,12 @@ handler({KeyCode='L'},false);assert(not s.AutoGuard and s.Aimbot and title=='Aut
 handler({KeyCode='L'},true);handler({KeyCode='X'},false);assert(not s.AutoGuard)
 input.focus=true;handler({KeyCode='L'},false);assert(not s.AutoGuard);input.focus=nil
 handler({KeyCode='L'},false);assert(s.AutoGuard and s.Aimbot and guardChanges==2)
+assert(s.AutoPlayKeybind=='J')
+local shown;e.AutoPlayToggle={SetValue=function(value)shown=value end}
+handler({KeyCode='J'},false);assert(s.AutoPlay and shown==true,'J enables autoplay and its UI')
+handler({KeyCode='J'},true);assert(s.AutoPlay,'processed J ignored')
+input.focus=true;handler({KeyCode='J'},false);assert(s.AutoPlay,'typing J ignored');input.focus=nil
+handler({KeyCode='J'},false);assert(not s.AutoPlay and shown==false and s.Aimbot and s.AutoGuard,'J disables and restores')
 local selected=a;e.Selector=function()return selected end
 e:SelectTarget(a);ah.Jumping:Fire(true);assert(oh.Jump and e.LastJump==e.Clock)
 oh.Jump=false;ah.Jumping:Fire(true);assert(not oh.Jump,'jump cooldown')
