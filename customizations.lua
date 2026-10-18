@@ -1,7 +1,7 @@
 -- Editable Ultimate preferences layered over the recovered Blessed program.
 local UltimatePreferences = {
     AutoGuardKey = "L", HideAimbotKeyPicker = true,
-    ShotDelay = 0.28, AimbotType = "Mixed arc", Aimbot = true, AutoGuard = true, BallCheck = true,
+    ShotDelay = 0.28, AimbotType = "High", Aimbot = true, AutoGuard = true, BallCheck = true,
     MatchTargetJump = true, AutoPlay = false,
     BallMagnet = false, MagnetStrength = 50,
     BallReach = true, ReachStrength = 10,

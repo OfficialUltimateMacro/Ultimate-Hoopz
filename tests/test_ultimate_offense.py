@@ -89,30 +89,25 @@ world.Raycast=function(self,origin,d,params)
 end
 assert(not e:CanTakeShot(root) and e.ShotBlockReason=='Shot line blocked','distant obstacle still blocks')
 world.Raycast=raycast
--- Screenshot control mapping and cooldown, possession hand, and pressure reads.
-e:ReleaseDribbleKeys(true);e.Clock=4;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.Position=root.Position+v(-10,0,0);own.Character.ball.Position=root.Position+v(0,0,-1)
-e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball)
-assert(keys[#keys][1] and keys[#keys][2]=='F','left to right behind back')
-local count=#keys;e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(#keys==count,'dribble cooldown')
-e:ReleaseDribbleKeys(true);assert(keys[#keys][1]==false and keys[#keys][2]=='F','release on stop')
-e.Clock=5;e.MoveCooldowns.R=e.Clock;own.Character.ball.Position=root.Position+v(0,0,1)
-e:ChooseDribble(root,root.Position+v(0,0,-8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='G' and keys[#keys][1])
-e:ReleaseDribbleKeys(true);e.Clock=6;eh.FloorMaterial='Air';e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R')
-e:ReleaseDribbleKeys(true);e.Clock=7;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;eh.FloorMaterial='Ground';er.Position=root.Position+v(-6,0,0);er.AssemblyLinearVelocity=v(3,0,0)
-e:ChooseDribble(root,root.Position+v(0,0,-8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='V')
-e:ReleaseDribbleKeys(true);e.Clock=8;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.AssemblyLinearVelocity=v();e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='C')
-e:ReleaseDribbleKeys(true);e.Clock=9;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.AssemblyLinearVelocity=v(3,0,0);e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='B')
-e:ReleaseDribbleKeys(true);e.Clock=10;e.MoveCooldowns=e.MoveCooldowns or {};e.MoveCooldowns.R=e.Clock;er.Position=root.Position+v(-10,0,-3);er.AssemblyLinearVelocity=v()
-local model={};function model:IsA()return false end;function model:FindFirstChildWhichIsA()return nil end
-e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),model);assert(keys[#keys][2]=='H')
+-- Screenshot key mapping remains available; tactical ball-protection policy
+-- is covered by test_ball_protection, rather than requiring random moves.
+for i,name in ipairs({'F','G','R','V','C','B','H'})do
+ e:ReleaseDribbleKeys(true);e.Clock=3+i;e.MoveCooldowns={}
+ assert(e:PulseDribble(name),'supported control '..name)
+ assert(keys[#keys][1] and keys[#keys][2]==name,'mapped key '..name)
+ e:ReleaseDribbleKeys(true);assert(not keys[#keys][1] and keys[#keys][2]==name,'release '..name)
+end
+local count=#keys
 e:ReleaseDribbleKeys(true);e.Clock=11;input.focus=true;count=#keys;assert(not e:PulseDribble('F') and #keys==count);input.focus=nil
 s.AutoGuardKeybind='F';assert(not e:PulseDribble('F'),'do not toggle guard on mapped key');s.AutoGuardKeybind='L'
 e.Clock=20;e.MoveCooldowns={};e.LastDribble=-100;e:ReleaseDribbleKeys(true)
 er.Position=root.Position+v(-10,0,0);er.AssemblyLinearVelocity=v();eh.FloorMaterial='Ground'
-e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R' and keys[#keys][1],'R used on grounded close defender')
-e.Clock=20.3;e:ReleaseDribbleKeys(true);own.Character.ball.Position=root.Position+v(0,0,-1)
-e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='F' and keys[#keys][1],'active move follows R in .3s')
-e.Clock=21.1;e:ReleaseDribbleKeys(true);e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R' and keys[#keys][1],'R repeats after cooldown')
+local before=#keys
+e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball)
+assert(#keys==before,'stationary defender does not cause automatic R spam')
+e.Clock=21;e.OpponentMemory=nil;er.Position=root.Position+v(-15,0,0);er.AssemblyLinearVelocity=v(14,0,0)
+e:ChooseDribble(root,root.Position+v(-8,0,0),e:ReadOpponents(root),own.Character.ball)
+assert(keys[#keys][2]=='R' and keys[#keys][1],'R responds to closing pressure before contact')
 e:ReleaseDribbleKeys(true)
 -- Disabling between queueing and execution must prevent a shot.
 er.Position=v(200,3,200);root.Position=spot;e:ResetOffense();e.Clock=12;e:AutoPlayStep(own.Character,oh,root);e.Clock=12.3

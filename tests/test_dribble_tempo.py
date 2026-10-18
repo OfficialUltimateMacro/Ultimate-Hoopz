@@ -11,12 +11,13 @@ e.Clock=10.11;assert(e:PulseDribble('F'),'second move after .11s');e:ReleaseDrib
 e.Clock=10.22;assert(e:PulseDribble('G'));e:ReleaseDribbleKeys(true)
 e.Clock=10.36;assert(not e:PulseDribble('G'),'same move has separate cooldown')
 e.Clock=10.41;assert(e:PulseDribble('R'),'R returns after .4s');e:ReleaseDribbleKeys(true)
-own.Character.ball=part(root.Position+v(0,0,-1));e.AutoMovePoint=root.Position+v(0,0,8)
-e.OpponentReads={{Position=root.Position+v(-10,0,0),Predicted=root.Position+v(-10,0,0),Velocity=v(),Airborne=false}}
+own.Character.ball=part(root.Position+v(0,0,-1));e.AutoMovePoint=root.Position+v(-8,0,0)
+e.OpponentReads={{Position=root.Position+v(-10,0,0),Predicted=root.Position+v(-10,0,0),Velocity=v(14,0,0),Airborne=false}}
 e.Clock=12;runService.bindings[e.RenderName](1/60);assert(e.LastDribble==12,'render dispatches without planner tick')
-e:ReleaseDribbleKeys(true);e.Clock=12.11;runService.bindings[e.RenderName](1/60);assert(e.LastDribble==12.11,'cached route allows next move between planning scans')
+e:ReleaseDribbleKeys(true);e.Clock=12.11;runService.bindings[e.RenderName](1/60);assert(e.LastDribble==12,'decision hold prevents animation thrashing')
+e.Clock=12.45;runService.bindings[e.RenderName](1/60);assert(e.LastDribble==12.45,'reactive move resumes after commit and cooldown')
 e:ReleaseDribbleKeys(true);local n=#keys;input.down.W=true;e.Clock=12.3;runService.bindings[e.RenderName](1/60);assert(#keys==n,'manual movement pauses render dribble')
 input.down.W=nil;e:SetAutoPlay(false);assert(not next(e.DribbleKeys),'disable releases all keys')
-return 'PASS: .10s move spacing, .20s same-move and .40s R cooldown, .04s holds, render cadence independent of route planner, manual pause and cleanup'
+return 'PASS: .10s move spacing, .20s same-move and .40s R cooldown, .04s holds, tactical commitment without random follow-up, manual pause and cleanup'
 '''
 print(run(lua.replace('SOURCE','[====['+source+']====]')).decode())

@@ -3,7 +3,7 @@ from lua_runtime import run
 source=(Path(__file__).resolve().parents[1]/'Ultimate.Blessed.decoded.lua').read_text()
 lua=r'''_G.ULTIMATE_BLESSED_INSPECT=true;bit32={}
 local app=assert(load(SOURCE,'mixed','t',_G))()
-assert(app.Preferences.AimbotType=='Mixed arc' and app.Prototypes.root[6][1974]=='Mixed arc')
+assert(app.Preferences.AimbotType=='High' and app.Prototypes.root[6][1974]=='High')
 local settings={AimbotType='Mixed arc'}
 local player={Power=70};function player:GetAttribute(k)return self[k]end;function player:SetAttribute(k,v)self[k]=v end
 local env={game={Players={LocalPlayer=player}}}

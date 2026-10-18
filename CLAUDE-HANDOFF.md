@@ -1,3 +1,15 @@
+High arc and possession-protection update (2026-10-18)
+
+High is now the startup AimbotType; Mixed arc and Low remain selectable. Shot Delay remains0.28. Dribbling no longer uses the random move fallback. ChooseDribble transfers an exposed hand away from a nearby defender, preserves an already protected hand, waits when a safe input is on cooldown, avoids open-lane input spam, and commits decisions for0.24s. R is reserved for closing pressure before contact. Shooting/Dunking actions always block dribble inputs.
+
+PlanEscape compares both exits against all nearby predicted defenders, steps sideways/backward at contact, and converts movement side into the character's actual RightVector before selecting F/G. Unknown or already protected hands do not trigger a guessed crossover.
+
+During close-pressure moving dribbles (within12studs), DesiredFacing points away from the defender so the back shields the ball. Camera yaw follows that direction through native shift-lock. Stopping to set a shot, entering dunk mode, losing pressure, manual input and disabling return normal control. Native automatic shift-lock was unavailable in the user's log; native shift-lock may need to be enabled manually for camera yaw to rotate the body. No forced root CFrame was reintroduced.
+
+New test_ball_protection covers safe hand transfers, cooldown restraint, protected-hand retention, open-lane restraint, action exclusion, facing away during dribbles and rim-facing recovery. Existing tests now validate reactive R rather than requiring stationary-defender/random move spam; camera tests check shielding plus return to hoop view. All results are offline mock behavior, not proof of a lower live steal rate. Keep user testing feedback focused on strips, facing and shot setup.
+
+---
+
 Shot Delay default update (2026-10-18): default is now the existing slider minimum, 0.28 seconds (previously 0.32). Bounds and user adjustment remain unchanged. customizations.lua applies initializer root[6][1976]; startup preferences check verifies the default and displayed 0.28.
 
 Current update (2026-10-18): Mixed arc is the default, ordered Low / Mixed arc / High. It averages native aim offsets and Power values; shared Auto-play range is 58–73 studs. Native endpoint tests pass, but live accuracy is uncalibrated.

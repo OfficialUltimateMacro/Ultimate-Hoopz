@@ -31,14 +31,16 @@ e:UpdateAutoFacing(.05);assert(oh.AutoRotate and lock.locked and camera.CFrame~=
 for _=1,20 do e:UpdateAutoFacing(1/60) end
 assert(root.CFrame==originalRootFrame,'script must not force root orientation')
 local want=e:DesiredFacing(root)
-assert(want.X<0 and want.Z>0,'facing blends drive direction with basket')
+assert(e.ProtectFacing and want.X>0.95,'turn back toward close defender')
 local d0=(camera.CFrame.Position-root.Position).Magnitude
 for _=1,240 do e:UpdateAutoFacing(1/60) end
 local d1=(camera.CFrame.Position-root.Position).Magnitude
 assert(math.abs(d1-d0)<1.5 and d1>=10,'camera radius stable, no creeping zoom-in ('..d0..'->'..d1..')')
 assert(camera.CFrame.Position.Y>root.Position.Y+5,'elevated court view')
 local toGoal=goal.Position-root.Position;local lk=camera.CFrame.LookVector
-assert((lk.X*toGoal.X+lk.Z*toGoal.Z)>0,'camera looks toward attacked basket')
+assert(lk.X>0.8,'shift-lock camera looks away from defender to shield ball')
+e.OpponentReads={};for _=1,180 do e:UpdateAutoFacing(1/60) end
+lk=camera.CFrame.LookVector;assert((lk.X*toGoal.X+lk.Z*toGoal.Z)>0,'resume basket view when pressure ends')
 local before=camera.CFrame.Position;e.AutoMovePoint=root.Position+v(8,0,-8);e:UpdateAutoFacing(1/60);e.AutoMovePoint=root.Position+v(-8,0,8);e:UpdateAutoFacing(1/60)
 assert((camera.CFrame.Position-before).Magnitude<1,'route flips do not jerk camera')
 input.GetMouseDelta=function()return {Magnitude=4}end;e:UpdateAutoFacing(.05)

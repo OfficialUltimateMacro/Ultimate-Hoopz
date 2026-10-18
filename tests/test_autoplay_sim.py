@@ -104,7 +104,7 @@ local side=e.Plan.Side;F.er.Position=root.Position+v(-6,0,-2);e.Clock=e.Clock+0.
 assert(e.Plan and e.Plan.Side==side,'committed side does not flip')
 -- 10. Hesitation versus a fast-closing defender.
 e.Plan=nil;e.NextEscape=nil;e.EscapeCount=0;e.MoveCooldowns={};e.LastDribble=-100;e.Clock=e.Clock+1
-F.er.Position=root.Position+v(-5,0,0.2);F.er.AssemblyLinearVelocity=v(14,0,0);e.OpponentMemory=nil
+F.er.Position=root.Position+v(-6.5,0,0.2);F.er.AssemblyLinearVelocity=v(14,0,0);e.OpponentMemory=nil
 e:OffenseStep(own.Character,oh,root);assert(e.Plan and e.Plan.Kind=='hesitate' and e.LastMove=='R','hesitation with R')
 -- 11. Respawn mid-possession: old body restored, new body plays.
 F.er.Position=v(300,3,300);restart(v(110,3,0));frames(30)

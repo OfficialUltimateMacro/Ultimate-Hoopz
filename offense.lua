@@ -123,6 +123,7 @@ function Extension:ResetOffense()
     self.SettlePosition,self.SettleSince=nil,nil
     self.DunkMode, self.DriveUntil, self.DunkingUntil = nil, nil, nil
     self.Plan, self.EscapeCount, self.NextEscape, self.PossessionStart = nil, 0, nil, nil
+    self.DribbleDecisionUntil=nil
     self.FakeShotStart, self.ForceShot, self.AttackMode = nil, nil, nil
     self.FreezeSince, self.FreezeLogged = nil, nil
 end
@@ -206,6 +207,7 @@ end
 function Extension:PulseDribble(name)
     -- Wait (bounded 0.6 s) while Hoopz reports an action from a previous move.
     local action = gameAction(self.Player and self.Player.Character)
+    if action=="Shooting" or action=="Dunking" then return false end
     if action ~= nil and action ~= "" then
         if self.ActionSeenValue ~= action then
             self.ActionSeenValue, self.ActionSeenSince = action, self.Clock
@@ -510,7 +512,23 @@ function Extension:DesiredFacing(root)
     local goalDir=toGoal and toGoal.Magnitude>0.5 and unit(toGoal)
     local move=self.AutoMovePoint and flat(self.AutoMovePoint-root.Position)
     local moveDir=move and move.Magnitude>0.6 and unit(move)
+    self.ProtectFacing=false
     if self.State=="Opponent" then return self.DefenseFacing end
+    if moveDir and self.Settings.AutoPlayDribble and not self.DunkMode
+        and (not toGoal or toGoal.Magnitude>16) then
+        local threat,nearest=nil,12
+        for _,opponent in ipairs(self.OpponentReads or {})do
+            local offset=flat(root.Position-opponent.Predicted)
+            local d=offset.Magnitude
+            if d>0.1 and d<nearest then threat,nearest=offset,d end
+        end
+        if threat then
+            self.ProtectFacing=true
+            -- Shift-lock turns our front away, keeping our back between the
+            -- defender and the ball. Movement remains controlled by the route.
+            return unit(unit(threat)*0.9+moveDir*0.1)
+        end
+    end
     local plan=self.Plan
     if plan and plan.Facing then return plan.Facing end
     if not moveDir then return goalDir end
@@ -573,10 +591,11 @@ function Extension:UpdateAutoFacing(dt)
     else
         local goal=self.OffenseGoal
         local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
-        viewDir=bodyDir
-        if toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(bodyDir*0.65+unit(toGoal)*0.35) end
+        viewDir=self.ProtectFacing and face or bodyDir
+        if not self.ProtectFacing and toGoal and toGoal.Magnitude>8 and unit(toGoal):Dot(bodyDir)>-0.2 then viewDir=unit(bodyDir*0.65+unit(toGoal)*0.35) end
     end
-    self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),defending and 7 or 3,defending and 7 or 2.6,dt)
+    local quickTurn=defending or self.ProtectFacing
+    self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),quickTurn and 7 or 3,quickTurn and 5.5 or 2.6,dt)
     -- Ease pitch into a court-reading band, never into the floor or overhead.
     local wantPitch=math.max(0.28,math.min(0.6,self.CameraPitch or 0.36))
     self.CameraPitch=(self.CameraPitch or wantPitch)+(wantPitch-(self.CameraPitch or wantPitch))*(1-math.exp(-2*math.min(dt,0.1)))
@@ -598,48 +617,52 @@ end
 ---------------------------------------------------------------------------
 -- Dribble choice. Reactive picks plus coordinated escape moves.
 ---------------------------------------------------------------------------
-local VARIETY = {"C","H","F","G","V","B","R"}
 function Extension:ChooseDribble(root, point, opponents, ball)
-    if not point or not ball or (self.Plan and self.Clock < self.Plan.Until) then return end
-    local threat, nearest = nil, 24
-    for _, opponent in ipairs(opponents) do
-        local d = flat(opponent.Position-root.Position).Magnitude
-        if d < nearest then threat,nearest=opponent,d end
+    if not point or not ball or (self.Plan and self.Clock < self.Plan.Until)
+        or self.Clock<(self.DribbleDecisionUntil or -100) then return end
+    local threat,nearest=nil,16
+    for _,opponent in ipairs(opponents)do
+        local d=flat(opponent.Predicted-root.Position).Magnitude
+        if d<nearest then threat,nearest=opponent,d end
     end
-    if not threat then return end
-    local right = root.CFrame.RightVector
-    local routeSide = flat(point-root.Position):Dot(right)
-    local threatSide = flat(threat.Predicted-root.Position):Dot(right)
-    local closing = flat(threat.Position-root.Position):Dot(threat.Velocity) < -6
-    local name
-    local fakeReady = self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4
-    if fakeReady and (threat.Airborne or nearest < 16) then name="R"
-    elseif closing and nearest < 8 then name=routeSide < 0 and "V" or "B"
-    elseif nearest < 7 and math.abs(threatSide) < 2 then name="C"
-    else
-        local part = ball:IsA("BasePart") and ball or ball:FindFirstChildWhichIsA("BasePart")
-        if part then
-            local hand = flat(part.Position-root.Position):Dot(right)
-            if routeSide > 1 and hand < -0.2 then name="F"
-            elseif routeSide < -1 and hand > 0.2 then name="G" end
-        elseif threatSide*routeSide < 0 then name="H" end
+    if not threat then self.DribbleStatus="Open lane: keep possession";return end
+    local right=root.CFrame.RightVector
+    local handPart=ballPart(ball)
+    local hand=handPart and flat(handPart.Position-root.Position):Dot(right) or 0
+    local threatSide=flat(threat.Predicted-root.Position):Dot(right)
+    local routeSide=flat(point-root.Position):Dot(right)
+    -- Protect the opposite hand from the defender. Do not cross toward a
+    -- steal threat just to keep producing keys; open lanes need no move.
+    local safeSide=threatSide>0.6 and -1 or (threatSide< -0.6 and 1 or (routeSide>=0 and 1 or -1))
+    local exposed=hand*threatSide>0.15
+    local direction=unit(flat(point-root.Position))
+    local toward=unit(flat(threat.Predicted-root.Position)):Dot(direction)
+    if not exposed and nearest<7 and routeSide*safeSide< -0.5 then
+        self.DribbleStatus="Protecting ball: wait for escape route";return
     end
-    if name and self:PulseDribble(name) then return end
-    if nearest < 24 then
-        local start=math.random(#VARIETY)
-        for i=0,#VARIETY-1 do
-            local candidate=VARIETY[(start+i-1)%#VARIETY+1]
-            if candidate~=self.LastMove and candidate~=name and self:PulseDribble(candidate) then return end
-        end
+    local move
+    if nearest<9 and (exposed or toward>0.5) then
+        if math.abs(hand)>0.2 and hand*safeSide<0 then move=safeSide>0 and "F" or "G"
+        elseif exposed then move="C" end
+    elseif nearest>=9 and toward>0.5 then
+        -- A fake is useful before contact, not on every close-range frame.
+        local closing=-flat(threat.Position-root.Position):Dot(threat.Velocity)/math.max(nearest,0.1)
+        if closing>8 then move="R" end
+    end
+    if move and self:PulseDribble(move) then
+        self.DribbleDecisionUntil=self.Clock+0.24
+        self.DribbleStatus="Protect "..(safeSide>0 and "right" or "left")..": "..move
     end
 end
 -- Move that carries the ball to the escape side: behind-the-back from the
 -- off hand, a cross when already on that side, or a fake toward the other
 -- side when the defender is square.
 function Extension:EscapeMove(side, hand, square)
+    if hand*side>0.2 then return nil end -- already protected: do not cross back into contact
     if square then return side > 0 and "V" or "B" end
-    if side > 0 then return hand < -0.2 and "F" or "C" end
-    return hand > 0.2 and "G" or "C"
+    if math.abs(hand)>0.2 then return side>0 and "F" or "G" end
+    return nil -- unknown ball hand: move to safety without guessing a crossover
+
 end
 -- Commit to a short lateral escape or hesitation when an on-ball defender
 -- is in the path. Committed plans prevent left/right flip-flopping; a cap per
@@ -676,25 +699,36 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local params = self:MakeRayParams()
     local defenderSide = flat(defender.Predicted-root.Position):Dot(lateral)
     local part = ballPart(ball)
-    local hand = part and flat(part.Position-root.Position):Dot(lateral) or 0
+    local hand = part and flat(part.Position-root.Position):Dot(root.CFrame.RightVector) or 0
     local square = math.abs(defenderSide) < 1.2
     local preferred
     if square then
-        preferred = hand ~= 0 and (hand > 0 and 1 or -1) or -(self.LastEscapeSide or 1)
+        preferred = -(self.LastEscapeSide or 1)
     else preferred = defenderSide > 0 and -1 or 1 end
     local closingSpeed = -flat(defender.Position-root.Position):Dot(defender.Velocity)/math.max(gap,0.01)
     -- Do not repeat a side that just failed to create space.
     local failed = self.EscapeFailed or {}
     if failed[preferred] and now-failed[preferred] < 2 then preferred = -preferred end
-    local chosen
-    for _, side in ipairs({preferred, -preferred}) do
-        local point = root.Position+lateral*side*7+forward*3
-        if self:WalkClear(root.Position, point, params) then chosen = {Side=side, Point=point}; break end
+    local chosen,bestScore=nil,-math.huge
+    for _,side in ipairs({preferred,-preferred})do
+        -- At contact, create lateral/backward separation rather than driving
+        -- through the handler's hands. Score both exits against every defender.
+        local point=root.Position+lateral*side*7+forward*(gap<6 and -2 or 2)
+        if self:WalkClear(root.Position,point,params) then
+            local clearance=30
+            for _,opponent in ipairs(opponents)do
+                clearance=math.min(clearance,flat(opponent.Predicted-point).Magnitude)
+            end
+            local bodySide=(point-root.Position):Dot(root.CFrame.RightVector)>=0 and 1 or -1
+            local protected=hand*bodySide>0 and 0.7 or 0
+            local score=clearance+protected+(side==preferred and 0.4 or 0)
+            if score>bestScore then chosen,bestScore={Side=side,BodySide=bodySide,Point=point},score end
+        end
     end
     if not chosen then return nil end
     self.EscapeCount = (self.EscapeCount or 0)+1
     self.LastEscapeSide = chosen.Side
-    if closingSpeed > 8 and gap < 7 and self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4 then
+    if closingSpeed > 8 and gap >= 6 and gap < 10 and self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4 then
         -- Hesitation: plant briefly with a fake-out, then escape away from
         -- where the defender committed.
         self.Plan = {Kind="hesitate", Until=now+0.22, Side=chosen.Side, Facing=forward}
@@ -703,7 +737,8 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         return self.Plan
     end
     self.Plan = {Kind="escape", Until=now+0.5, Side=chosen.Side, Point=chosen.Point, Facing=forward}
-    self:PulseDribble(self:EscapeMove(chosen.Side, hand, square))
+    local move=self:EscapeMove(chosen.BodySide,hand,square and gap>7)
+    if move then self:PulseDribble(move) end
     return self.Plan
 end
 
