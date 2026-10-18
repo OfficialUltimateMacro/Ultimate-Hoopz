@@ -14,14 +14,27 @@ local function frame(position,target)
 end
 env.CFrame={lookAt=frame}
 local s={Aimbot=true,AutoGuard=true,AutoGuardKeybind='L'};e:Install(env,s);e:SetAutoPlay(true)
+world.Raycast=function()return nil end
 own.Character.ball=part(root.Position+v(0,0,-1));oh.AutoRotate=true
 root.CFrame=frame(root.Position,root.Position+v(-1,0,0))
 local camera={CameraSubject=oh,CFrame=frame(root.Position+v(12,8,0),root.Position)};world.CurrentCamera=camera
 e.OpponentReads={{Position=root.Position+v(-10,0,0),Predicted=root.Position+v(-10,0,0)}}
 e.AutoMovePoint=root.Position+v(-8,0,8);local initialCamera=camera.CFrame
-e:UpdateAutoFacing(.05);assert(oh.AutoRotate==false and camera.CFrame~=initialCamera,'camera and body turn near defender')
+e.OffenseGoal=goal
+e:UpdateAutoFacing(.05);assert(oh.AutoRotate==false and camera.CFrame~=initialCamera,'camera and body engage')
+local prevLook=root.CFrame.LookVector;assert(prevLook.Z>0 and prevLook.Z<.5,'body yaw eased, not snapped')
+for _=1,20 do e:UpdateAutoFacing(1/60) end
 assert((root.CFrame.Position-root.Position).Magnitude<.001,'no positional teleport')
-assert(root.CFrame.LookVector.Z>.4,'body faces chosen route')
+assert(root.CFrame.LookVector.Z>.6,'body converges on chosen route')
+local d0=(camera.CFrame.Position-root.Position).Magnitude
+for _=1,240 do e:UpdateAutoFacing(1/60) end
+local d1=(camera.CFrame.Position-root.Position).Magnitude
+assert(math.abs(d1-d0)<1.5 and d1>=10,'camera radius stable, no creeping zoom-in ('..d0..'->'..d1..')')
+assert(camera.CFrame.Position.Y>root.Position.Y+5,'elevated court view')
+local toGoal=goal.Position-root.Position;local lk=camera.CFrame.LookVector
+assert((lk.X*toGoal.X+lk.Z*toGoal.Z)>0,'camera looks toward attacked basket')
+local before=camera.CFrame.Position;e.AutoMovePoint=root.Position+v(8,0,-8);e:UpdateAutoFacing(1/60);e.AutoMovePoint=root.Position+v(-8,0,8);e:UpdateAutoFacing(1/60)
+assert((camera.CFrame.Position-before).Magnitude<1,'route flips do not jerk camera')
 input.GetMouseDelta=function()return {Magnitude=4}end;e:UpdateAutoFacing(.05)
 assert(oh.AutoRotate==true and not e.AutoFacingHumanoid,'mouse motion yields control')
 input.GetMouseDelta=function()return {Magnitude=0}end;e.Clock=1;e:UpdateAutoFacing(.05);assert(not oh.AutoRotate)
@@ -37,6 +50,6 @@ e.CanTakeShot=function()return true end;e.Clock=3
 assert(not e:OffenseStep(own.Character,oh,root));e.Clock=3.25;assert(not e:OffenseStep(own.Character,oh,root));e.Clock=3.55
 assert(e:OffenseStep(own.Character,oh,root),'stale velocity does not stall jump attempt')
 e:Destroy()
-return 'PASS: camera/body route alignment without teleport, mouse/manual/shot/possession/toggle cleanup, original AutoRotate preservation, stationary-position shot settling despite stale velocity'
+return 'PASS: eased body yaw, stable elevated basket-facing camera (no zoom creep or route-flip jerk), no teleport, mouse/manual/shot/possession/toggle cleanup, original AutoRotate preservation, stationary-position shot settling despite stale velocity'
 '''
 print(run(lua.replace('SOURCE','[====['+source+']====]')).decode())

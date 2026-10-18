@@ -7,7 +7,7 @@
   "scheduled_gameplay_tasks_tested": false,
   "live_Hoopz_tested": false,
   "Hoopz_mock_startup": "pass",
-  "Hoopz_mock_actions": 2426,
+  "Hoopz_mock_actions": 2474,
   "requested_defaults_verified": {
     "guardKey": "Enum.KeyCode.L",
     "magnet": true,
@@ -24,7 +24,8 @@
     "collisions": false,
     "reachStrength": 10,
     "walkSpeed": 0.01,
-    "antiDrop": true
+    "antiDrop": true,
+    "autoPlayDunk_toggle_label": true
   },
   "aim_key_picker_removed": true,
   "guard_key_picker_retained": true,
@@ -38,12 +39,13 @@
   "offense_coverage": [
     "possession movement and shot-position arrival",
     "friendly/remote filters and bounded velocity prediction",
-    "jumping/close defender and obstructed-shot rejection",
+    "contested and zero-space shots fire; obstructed-shot rejection",
     "wall and ledge steering",
     "F G H V B R C dribble choices, cooldown and key release",
     "typing and guard key conflict",
     "queued-shot cancellation",
-    "fully blocked routes and cleanup"
+    "fully blocked routes and cleanup",
+    "inside-ring rim drive, T dunk, dunk cooldown and Auto-dunk toggle"
   ],
   "player_collisions_regression": "pass: default-off, torso-only changes within20, exclusions, server baseline and external values, range/death/respawn/disable/unload restoration",
   "live_player_push_verified": false,
@@ -53,14 +55,16 @@
   "active_dribble_regression": "pass: grounded close defender R, .4s follow-up move, R after1.1s",
   "UI_labels": "Auto-play and Player collisions shortened; full startup verifies labels; no live pixel test",
   "autoplay_key_notifications": "pass: one Enabled/Disabled notification per accepted key toggle; no notice for processed/typing input",
-  "camera_assist_regression": "pass: smooth heading, no position teleport, mouse/manual/shot/possession/toggle release, AutoRotate preservation",
+  "camera_assist_regression": "pass: eased body yaw, constant-radius elevated basket-facing camera (no zoom creep over 240 frames), route flips do not jerk camera, no teleport, release paths, AutoRotate preservation",
   "original_VM_shot_integration": "pass: one press/release even when RequestAutoJump forced false; original dispatch independent of jump confirmation",
   "shot_settle_regression": "pass: stable position with stale velocity reaches shot attempt",
   "opponent_prediction": "position-history velocity blend and two-step intercept-aware local steering; offline only",
-  "shot_gate_regression": "pass: rim/backboard endpoint permitted, distant wall rejected",
+  "shot_gate_regression": "pass: defenders never veto; rim/backboard endpoint permitted, distant wall rejected",
   "shot_status_UI": "full mocked startup verifies Shot status button; shows reason, attempts and dispatch/error",
   "live_shooting_verified": false,
-  "dribble_tempo_regression": "pass: .14s global gap, .28s same ordinary move, .55s R, .04s hold and render dispatch independent of route planning; manual pause and cleanup",
+  "dribble_tempo_regression": "pass: .10s global gap, .20s same move, .40s R, .04s hold, render dispatch; manual pause and cleanup",
   "live_dribble_speed_verified": false,
-  "video_reference": "user supplied 2026-10-17 21-18-08.mp4; local frame inspection, including0.1s samples of3-5.3s; dispatch cadence chosen to approximate fast chains, not an exact input benchmark"
+  "video_reference": "user supplied 2026-10-17 21-18-08.mp4; local frame inspection, including0.1s samples of3-5.3s; dispatch cadence chosen to approximate fast chains, not an exact input benchmark",
+  "live_dunk_verified": false,
+  "test_platform": "Linux shell on user machine, Lua 5.5.0 built from github.com/lua/lua tag v5.5.0 (LUA_DLL=liblua55.so)"
 }

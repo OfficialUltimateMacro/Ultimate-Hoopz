@@ -56,8 +56,18 @@ local spot=e.ShotSpot;assert(math.abs((spot-goal.Position).Magnitude-65)<.01,'he
 runService.bindings[e.RenderName]();assert(oh.moves>0,'render moves WITH possession')
 root.Position=spot;root.AssemblyLinearVelocity=v();e.Clock=1
 assert(not e:OffenseStep(own.Character,oh,root));e.Clock=1.3;assert(e:OffenseStep(own.Character,oh,root),'open and settled allows shot')
-er.Position=root.Position+v(-5,0,0);eh.FloorMaterial='Air';assert(not e:CanTakeShot(root),'jumping contest blocks shot')
-e.Clock=2;e:OffenseStep(own.Character,oh,root);assert(e.AutoMovePoint and (e.ShotSpot-root.Position).Magnitude>5,'contested spot replans away')
+er.Position=root.Position+v(-5,0,0);eh.FloorMaterial='Air'
+e.Clock=2;e.OpenSince=nil;e.SettlePosition=nil;assert(e:OffenseStep(own.Character,oh,root),'contested jumping defender: shoot immediately')
+assert(e.ShotBlockReason=='Contested: shooting anyway' and not e.AutoMovePoint,'contest reported, no endless dribble')
+er.Position=root.Position+v(-1,0,0);eh.FloorMaterial='Ground';e.Clock=2.05;assert(e:OffenseStep(own.Character,oh,root),'zero space still shoots')
+-- Inside the ring: drive to the rim and press T, not back out to the 3.
+er.Position=v(200,3,200);e:ResetOffense();e.OffenseGoal=goal;e.GoalDirection=v(1,0,0);e.OffenseCharacter=own.Character
+local saved=root.Position;root.Position=v(30,3,0);e.Clock=2.5;assert(not e:OffenseStep(own.Character,oh,root))
+assert(e.DunkMode and e.AutoMovePoint and e.AutoMovePoint.X<30,'drives toward rim inside 3pt ring')
+root.Position=v(4,3,0);e.Clock=2.6;e:OffenseStep(own.Character,oh,root);assert(keys[#keys][2]=='T' and keys[#keys][1] and e.DunkAttempts==1,'T dunk at rim')
+e.Clock=2.7;e:OffenseStep(own.Character,oh,root);assert(e.DunkAttempts==1,'dunk cooldown')
+s.AutoPlayDunk=false;e.Clock=4;e:OffenseStep(own.Character,oh,root);assert(not e.DunkMode,'auto-dunk toggle off');s.AutoPlayDunk=true
+e:ReleaseDribbleKeys(true);root.Position=saved;e:ResetOffense();e.OffenseGoal=goal;e.GoalDirection=v(1,0,0);e.OffenseCharacter=own.Character
 er.Position=v(200,3,200);eh.FloorMaterial='Ground'
 world.wall=true;local point=e:SteerTo(root,root.Position+v(-20,0,0),{});assert(point and math.abs(point.Z-root.Position.Z)>1,'route around blocked straight path')
 world.wall=false;world.edge=true
@@ -96,8 +106,8 @@ s.AutoGuardKeybind='F';assert(not e:PulseDribble('F'),'do not toggle guard on ma
 e.Clock=20;e.MoveCooldowns={};e.LastDribble=-100;e:ReleaseDribbleKeys(true)
 er.Position=root.Position+v(-10,0,0);er.AssemblyLinearVelocity=v();eh.FloorMaterial='Ground'
 e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R' and keys[#keys][1],'R used on grounded close defender')
-e.Clock=20.4;e:ReleaseDribbleKeys(true);own.Character.ball.Position=root.Position+v(0,0,-1)
-e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='F' and keys[#keys][1],'active move follows R in .4s')
+e.Clock=20.3;e:ReleaseDribbleKeys(true);own.Character.ball.Position=root.Position+v(0,0,-1)
+e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='F' and keys[#keys][1],'active move follows R in .3s')
 e.Clock=21.1;e:ReleaseDribbleKeys(true);e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball);assert(keys[#keys][2]=='R' and keys[#keys][1],'R repeats after cooldown')
 e:ReleaseDribbleKeys(true)
 -- Disabling between queueing and execution must prevent a shot.
@@ -118,6 +128,6 @@ end
 assert(shots==1 and e:InShotRange(root),'positioning loop arrives and shoots')
 world.blockAll=true;root.Position=v(110,3,0);e.Clock=e.Clock+2;e:ResetOffense();e:OffenseStep(own.Character,oh,root);assert(not e.AutoMovePoint,'fully blocked route stops')
 e:Destroy();assert(not next(e.DribbleKeys) and not runService.bindings[e.RenderName])
-return 'PASS: possession movement, shot positioning and arrival simulation, teammate/court filters, bounded opponent prediction, contest/jump/obstruction gates, obstacle/ledge steering, screenshot F/G/R/V/C inputs and cooldown/release, focus/key conflicts, queued-shot cancellation, blocked-route stop and cleanup'
+return 'PASS: possession movement, shot positioning and arrival simulation, teammate/court filters, bounded opponent prediction, contested and zero-space shots, inside-ring rim drive and T dunk, obstruction gates, obstacle/ledge steering, screenshot F/G/R/V/C inputs and cooldown/release, focus/key conflicts, queued-shot cancellation, blocked-route stop and cleanup'
 '''.replace('SOURCE','[====['+source+']====]')
 print(run(lua).decode())

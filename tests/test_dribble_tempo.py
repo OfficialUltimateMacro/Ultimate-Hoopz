@@ -7,16 +7,16 @@ lua=raw.split('local s={AutoGuard=true')[0]+r'''
 e:Install(env,{Aimbot=true,AutoGuard=true,AutoGuardKeybind='L'});e:SetAutoPlay(true)
 e.Clock=10;assert(e:PulseDribble('R'));local first=e.DribbleKeys.R;assert(math.abs(first-10.04)<.001)
 e.Clock=10.05;assert(not e:PulseDribble('F'),'minimum global spacing');e:ReleaseDribbleKeys(true)
-e.Clock=10.15;assert(e:PulseDribble('F'),'second move after .15s');e:ReleaseDribbleKeys(true)
-e.Clock=10.30;assert(e:PulseDribble('G'));e:ReleaseDribbleKeys(true)
-e.Clock=10.46;assert(not e:PulseDribble('G'),'same move has separate cooldown')
-e.Clock=10.58;assert(e:PulseDribble('R'),'R returns after .55s');e:ReleaseDribbleKeys(true)
+e.Clock=10.11;assert(e:PulseDribble('F'),'second move after .11s');e:ReleaseDribbleKeys(true)
+e.Clock=10.22;assert(e:PulseDribble('G'));e:ReleaseDribbleKeys(true)
+e.Clock=10.36;assert(not e:PulseDribble('G'),'same move has separate cooldown')
+e.Clock=10.41;assert(e:PulseDribble('R'),'R returns after .4s');e:ReleaseDribbleKeys(true)
 own.Character.ball=part(root.Position+v(0,0,-1));e.AutoMovePoint=root.Position+v(0,0,8)
 e.OpponentReads={{Position=root.Position+v(-10,0,0),Predicted=root.Position+v(-10,0,0),Velocity=v(),Airborne=false}}
 e.Clock=12;runService.bindings[e.RenderName](1/60);assert(e.LastDribble==12,'render dispatches without planner tick')
-e:ReleaseDribbleKeys(true);e.Clock=12.15;runService.bindings[e.RenderName](1/60);assert(e.LastDribble==12.15,'cached route allows next move between planning scans')
+e:ReleaseDribbleKeys(true);e.Clock=12.11;runService.bindings[e.RenderName](1/60);assert(e.LastDribble==12.11,'cached route allows next move between planning scans')
 e:ReleaseDribbleKeys(true);local n=#keys;input.down.W=true;e.Clock=12.3;runService.bindings[e.RenderName](1/60);assert(#keys==n,'manual movement pauses render dribble')
 input.down.W=nil;e:SetAutoPlay(false);assert(not next(e.DribbleKeys),'disable releases all keys')
-return 'PASS: .14s move spacing, .28s same-move and .55s R cooldown, .04s holds, render cadence independent of route planner, manual pause and cleanup'
+return 'PASS: .10s move spacing, .20s same-move and .40s R cooldown, .04s holds, render cadence independent of route planner, manual pause and cleanup'
 '''
 print(run(lua.replace('SOURCE','[====['+source+']====]')).decode())

@@ -264,6 +264,7 @@ function Extension:Install(environment, settings)
         settings.PlayerCollisions = false
         settings.AutoPlayKeybind = environment.Enum.KeyCode.J
         settings.AutoPlayCamera = true
+        settings.AutoPlayDunk = true
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -280,6 +281,7 @@ function Extension:Install(environment, settings)
     settings.PlayerCollisions = false
     settings.AutoPlayKeybind = environment.Enum.KeyCode.J
     settings.AutoPlayCamera = true
+    settings.AutoPlayDunk = true
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -324,12 +326,15 @@ function Extension:InstallControls(section)
         self.Settings.AutoPlayCamera=value
         if not value and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
     end})
+    section:NewToggle({Title = "Auto-dunk", Default = true, Callback = function(value)
+        self.Settings.AutoPlayDunk=value
+    end})
     section:NewButton({Title = "Shot status", Callback = function()
         local captures=self.InputCaptures
         if captures and captures[2] and type(captures[2].Notification)=="function" then
             pcall(function()
                 captures[2].Notification().new({Title="Auto-play shot status",Description=(self.LastShotResult or "No shot routine sent yet")
-                    .."\n"..tostring(self.ShotBlockReason or self.AutoPlayStatus).."\nAttempts: "..tostring(self.ShotAttempts or 0),Duration=8})
+                    .."\n"..tostring(self.ShotBlockReason or self.AutoPlayStatus).."\nShots: "..tostring(self.ShotAttempts or 0).."  Dunks: "..tostring(self.DunkAttempts or 0),Duration=8})
             end)
         end
     end})

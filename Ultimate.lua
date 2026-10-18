@@ -365,6 +365,7 @@ function Extension:Install(environment, settings)
         settings.PlayerCollisions = false
         settings.AutoPlayKeybind = environment.Enum.KeyCode.J
         settings.AutoPlayCamera = true
+        settings.AutoPlayDunk = true
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -381,6 +382,7 @@ function Extension:Install(environment, settings)
     settings.PlayerCollisions = false
     settings.AutoPlayKeybind = environment.Enum.KeyCode.J
     settings.AutoPlayCamera = true
+    settings.AutoPlayDunk = true
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -425,12 +427,15 @@ function Extension:InstallControls(section)
         self.Settings.AutoPlayCamera=value
         if not value and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
     end})
+    section:NewToggle({Title = "Auto-dunk", Default = true, Callback = function(value)
+        self.Settings.AutoPlayDunk=value
+    end})
     section:NewButton({Title = "Shot status", Callback = function()
         local captures=self.InputCaptures
         if captures and captures[2] and type(captures[2].Notification)=="function" then
             pcall(function()
                 captures[2].Notification().new({Title="Auto-play shot status",Description=(self.LastShotResult or "No shot routine sent yet")
-                    .."\n"..tostring(self.ShotBlockReason or self.AutoPlayStatus).."\nAttempts: "..tostring(self.ShotAttempts or 0),Duration=8})
+                    .."\n"..tostring(self.ShotBlockReason or self.AutoPlayStatus).."\nShots: "..tostring(self.ShotAttempts or 0).."  Dunks: "..tostring(self.DunkAttempts or 0),Duration=8})
             end)
         end
     end})
@@ -594,6 +599,7 @@ function Extension:ResetOffense()
     self.LastPlan = nil
     self.RouteDirection, self.RouteHoldUntil = nil, nil
     self.SettlePosition,self.SettleSince=nil,nil
+    self.DunkMode=nil
 end
 function Extension:ReleaseJumpKey()
     if not self.Environment then return end
@@ -731,12 +737,12 @@ function Extension:CanTakeShot(root)
     local goal = self.OffenseGoal
     if not goal or not goal.Parent then self.ShotBlockReason="No attack basket selected";return false end
     if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
-    local space, jumping = self:SpaceAt(root.Position, self:ReadOpponents(root))
-    if space<12 then self.ShotBlockReason="Defender too close";return false end
-    if jumping then self.ShotBlockReason="Defender contesting in the air";return false end
     if not self:InShotRange(root) then self.ShotBlockReason="Outside shooting range";return false end
     if not self:ShotLaneClear(root,goal,self:MakeRayParams()) then self.ShotBlockReason="Shot line blocked";return false end
-    self.ShotBlockReason="Open and in range"
+    -- Defenders no longer veto the shot: contested shots go up immediately.
+    local space, jumping = self:SpaceAt(root.Position, self.OpponentReads or {})
+    self.ShotContested = space < 10 or jumping
+    self.ShotBlockReason = self.ShotContested and "Contested: shooting anyway" or "Open and in range"
     return true
 end
 function Extension:PickShotSpot(root, opponents, params)
@@ -813,11 +819,19 @@ function Extension:ReleaseAutoFacing()
         end)
     end
     self.AutoFacingHumanoid,self.SavedAutoRotate=nil,nil
+    self.FaceYaw,self.CameraYaw,self.CameraDistance,self.CameraCurrentDistance=nil,nil,nil,nil
+end
+local atan2 = math.atan2 or math.atan
+local function yawOf(d) return atan2(d.X, d.Z) end
+local function wrapAngle(a) return (a+math.pi)%(2*math.pi)-math.pi end
+local function approachYaw(current, target, rate, dt)
+    if not current then return target end
+    return current + wrapAngle(target-current)*(1-math.exp(-rate*math.min(dt,0.1)))
 end
 function Extension:UpdateAutoFacing(dt)
     local env=self.Environment
     if not env or not env.CFrame or not self.Alive or not self.Settings.AutoPlay or not self.Settings.AutoPlayCamera
-        or self.Shooting or not self.AutoMovePoint or self:IsManual() then self:ReleaseAutoFacing();return end
+        or self.Shooting or self:IsManual() then self:ReleaseAutoFacing();return end
     local character,humanoid,root=characterParts(self.Player)
     if not humanoid or not heldBall(character) then self:ReleaseAutoFacing();return end
     local activeCamera=env.workspace.CurrentCamera
@@ -836,37 +850,60 @@ function Extension:UpdateAutoFacing(dt)
     end
     if cameraInput then self.CameraPauseUntil=self.Clock+0.8 end
     if self.CameraPauseUntil and self.Clock<self.CameraPauseUntil then self:ReleaseAutoFacing();return end
-    local nearby=self:SpaceAt(root.Position,self.OpponentReads or {})
-    if nearby>20 then self:ReleaseAutoFacing();return end
-    local direction=flat(self.AutoMovePoint-root.Position)
-    if direction.Magnitude<0.6 then self:ReleaseAutoFacing();return end
-    direction=unit(direction)
+    local goal=self.OffenseGoal
+    local toGoal=goal and goal.Parent and flat(goal.Position-root.Position)
+    -- Body: face the drive direction, but square up to the rim when close or
+    -- when settling for a shot. Smoothed yaw avoids the per-scan flip jitter.
+    local face
+    if self.AutoMovePoint and flat(self.AutoMovePoint-root.Position).Magnitude>0.6 then
+        face=unit(flat(self.AutoMovePoint-root.Position))
+        if toGoal and toGoal.Magnitude<14 then face=unit(face+unit(toGoal)*2) end
+    elseif toGoal and toGoal.Magnitude>0.5 then face=unit(toGoal) end
+    if not face then self:ReleaseAutoFacing();return end
     if self.AutoFacingHumanoid~=humanoid then
         self:ReleaseAutoFacing();self.AutoFacingHumanoid=humanoid;self.SavedAutoRotate=humanoid.AutoRotate
+        local look=root.CFrame and root.CFrame.LookVector
+        if look and flat(look).Magnitude>0.1 then self.FaceYaw=yawOf(look) end
     end
     humanoid.AutoRotate=false
-    local alpha=1-math.exp(-8*math.min(dt,0.1))
-    root.CFrame=root.CFrame:Lerp(env.CFrame.lookAt(root.Position,root.Position+direction),alpha)
+    self.FaceYaw=approachYaw(self.FaceYaw,yawOf(face),12,dt)
+    local bodyDir=env.Vector3.new(math.sin(self.FaceYaw),0,math.cos(self.FaceYaw))
+    root.CFrame=env.CFrame.lookAt(root.Position,root.Position+bodyDir)
+    -- Camera: elevated broadcast view behind the player looking toward the
+    -- attacked basket, fixed radius (no lerp-chord creep), slow yaw easing.
     local camera=env.workspace.CurrentCamera
-    if camera and camera.CameraSubject==humanoid then
-        local focus=root.Position+env.Vector3.new(0,2,0)
-        local offset=camera.CFrame.Position-focus
-        local zoom=flat(offset).Magnitude
-        if zoom>2 then
-            local desired=focus-direction*zoom+env.Vector3.new(0,offset.Y,0)
-            local params=self:MakeRayParams()
-            local hit=params and env.workspace:Raycast(focus,desired-focus,params)
-            if hit then desired=hit.Position+unit(focus-hit.Position)*0.6 end
-            camera.CFrame=camera.CFrame:Lerp(env.CFrame.lookAt(desired,focus),1-math.exp(-4*math.min(dt,0.1)))
-        end
+    if not camera or camera.CameraSubject~=humanoid then return end
+    local viewDir=(toGoal and toGoal.Magnitude>6) and unit(toGoal) or bodyDir
+    if toGoal and toGoal.Magnitude<=6 then viewDir=unit(bodyDir) end
+    if not self.CameraDistance then
+        local current=(camera.CFrame.Position-root.Position).Magnitude
+        self.CameraDistance=math.max(15,math.min(24,current==current and current or 18))
+        self.CameraCurrentDistance=self.CameraDistance
+        local look=camera.CFrame.LookVector
+        if look and flat(look).Magnitude>0.1 then self.CameraYaw=yawOf(look) end
     end
+    self.CameraYaw=approachYaw(self.CameraYaw,yawOf(viewDir),3.5,dt)
+    local camDir=env.Vector3.new(math.sin(self.CameraYaw),0,math.cos(self.CameraYaw))
+    local focus=root.Position+env.Vector3.new(0,2.5,0)+camDir*4
+    local pitch=0.42
+    local wanted=self.CameraDistance
+    local back=camDir*(-math.cos(pitch))+env.Vector3.new(0,math.sin(pitch),0)
+    local params=self:MakeRayParams()
+    local hit=params and env.workspace:Raycast(focus,back*wanted,params)
+    if hit and hit.Position then wanted=math.max(6,(hit.Position-focus).Magnitude-0.8) end
+    local current=self.CameraCurrentDistance or wanted
+    -- Pull in fast when blocked, ease back out slowly.
+    local rate=wanted<current and 20 or 2.5
+    current=current+(wanted-current)*(1-math.exp(-rate*math.min(dt,0.1)))
+    self.CameraCurrentDistance=current
+    camera.CFrame=env.CFrame.lookAt(focus+back*current,focus)
 end
-function Extension:PulseDribble(name)
-    if not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.14
-        or self:IsManual() or self.Shooting then return false end
+function Extension:PulseKey(name, hold, cooldown, force)
+    if self:IsManual() or self.Shooting then return false end
+    if not force and (not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.1) then return false end
     local key = self.Environment.Enum.KeyCode[name]
     self.MoveCooldowns = self.MoveCooldowns or {}
-    if self.Clock-(self.MoveCooldowns[name] or -100) < (name == "R" and 0.55 or 0.28) then return false end
+    if self.Clock-(self.MoveCooldowns[name] or -100) < cooldown then return false end
     if key == self.Settings.AutoGuardKeybind then return false end
     if self.Input:IsKeyDown(key) then return false end
     if not self.VirtualInput then
@@ -875,13 +912,13 @@ function Extension:PulseDribble(name)
         self.VirtualInput = service
     end
     self.DribbleKeys = self.DribbleKeys or {}
-    self.DribbleKeys[key] = self.Clock+0.04
+    self.DribbleKeys[key] = self.Clock+hold
     local ok = pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,true,key,false,self.Environment.game)
     if not ok then self:ReleaseDribbleKeys(true);self.DribbleStatus="Input unavailable";return false end
-    self.LastDribble,self.DribbleStatus = self.Clock,name
+    self.LastDribble,self.DribbleStatus,self.LastMove = self.Clock,name,name
     self.MoveCooldowns[name] = self.Clock
     -- Release independently of the planner too, even if its heartbeat stops.
-    self.Environment.task.delay(0.045,function()
+    self.Environment.task.delay(hold+0.005,function()
         if self.DribbleKeys[key] then
             pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,false,key,false,self.Environment.game)
             self.DribbleKeys[key]=nil
@@ -889,9 +926,13 @@ function Extension:PulseDribble(name)
     end)
     return true
 end
+function Extension:PulseDribble(name)
+    return self:PulseKey(name, 0.04, name == "R" and 0.4 or 0.2)
+end
+local VARIETY = {"C","H","F","G","V","B","R"}
 function Extension:ChooseDribble(root, point, opponents, ball)
     if not point then return end
-    local threat, nearest = nil, 18
+    local threat, nearest = nil, 24
     for _, opponent in ipairs(opponents) do
         local d = flat(opponent.Position-root.Position).Magnitude
         if d < nearest then threat,nearest=opponent,d end
@@ -902,7 +943,7 @@ function Extension:ChooseDribble(root, point, opponents, ball)
     local threatSide = flat(threat.Predicted-root.Position):Dot(right)
     local closing = flat(threat.Position-root.Position):Dot(threat.Velocity) < -6
     local name
-    local fakeReady = self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.55
+    local fakeReady = self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4
     if fakeReady and (threat.Airborne or nearest < 16) then name="R"
     elseif closing and nearest < 8 then name=routeSide < 0 and "V" or "B"
     elseif nearest < 7 and math.abs(threatSide) < 2 then name="C"
@@ -913,9 +954,26 @@ function Extension:ChooseDribble(root, point, opponents, ball)
             if routeSide > 1 and hand < -0.2 then name="F"
             elseif routeSide < -1 and hand > 0.2 then name="G" end
         elseif threatSide*routeSide < 0 then name="H" end
-        if not name and nearest < 16 then name=math.abs(routeSide)>2 and "H" or "C" end
     end
-    if name then self:PulseDribble(name) end
+    if name and self:PulseDribble(name) then return end
+    -- Mix it up: any ready move other than the last one, so pressure gets a
+    -- varied chain instead of one repeated animation.
+    if nearest < 24 then
+        local start=math.random(#VARIETY)
+        for i=0,#VARIETY-1 do
+            local candidate=VARIETY[(start+i-1)%#VARIETY+1]
+            if candidate~=self.LastMove and candidate~=name and self:PulseDribble(candidate) then return end
+        end
+    end
+end
+function Extension:TryDunk(root, goal)
+    local reach=flat(goal.Position-root.Position).Magnitude
+    if reach>9 then return false end
+    if not self:PulseKey("T",0.25,1.2,true) then return false end
+    self.DunkAttempts=(self.DunkAttempts or 0)+1
+    self.LastShotResult="Dunk key T sent"
+    self.AutoPlayStatus="Dunking"
+    return true
 end
 function Extension:OffenseStep(character, humanoid, root)
     if self.Shooting then self:StopAutoMove();return false end
@@ -925,25 +983,48 @@ function Extension:OffenseStep(character, humanoid, root)
         if not self.OffenseGoal then self:StopAutoMove();self.AutoPlayStatus="No nearby attack basket";return false end
         self.GoalDirection = unit(flat(root.Position-self.OffenseGoal.Position))
     end
+    local goal=self.OffenseGoal
     local opponents = self:ReadOpponents(root)
     self.OpponentReads = opponents
     local space, jumping = self:SpaceAt(root.Position,opponents)
+    local grounded = humanoid.FloorMaterial ~= self.Environment.Enum.Material.Air
+    -- Inside the shooting ring the calibrated jumper cannot score, so attack
+    -- the rim and dunk instead of backing out. Hysteresis avoids flapping.
+    local rimDistance = distance(root.Position,goal.Position)
+    local minimum = self.Settings.AimbotType == "High" and 57 or 58
+    if self.Settings.AutoPlayDunk ~= false then
+        if rimDistance < minimum-3 then self.DunkMode=true
+        elseif rimDistance > minimum then self.DunkMode=false end
+    else self.DunkMode=false end
+    if self.DunkMode then
+        self.OpenSince,self.SettlePosition,self.SettleSince=nil,nil,nil
+        if grounded and self:TryDunk(root,goal) then return false end
+        local rim=goal.Position+self.GoalDirection*2.5
+        rim=self.Environment.Vector3.new(rim.X,root.Position.Y,rim.Z)
+        local point=self:SteerTo(root,rim,opponents) or (flat(rim-root.Position).Magnitude>0.6 and rim or nil)
+        if point then
+            self.AutoMovePoint=point;self.AutoPlayStatus="Driving to the rim"
+            self:ChooseDribble(root,point,opponents,heldBall(character))
+        else self:StopAutoMove();self.AutoPlayStatus="At the rim" end
+        return false
+    end
     local canShoot = self:CanTakeShot(root)
-    if canShoot and humanoid.FloorMaterial ~= self.Environment.Enum.Material.Air then
+    if canShoot and grounded then
         self:StopAutoMove();self:ReleaseDribbleKeys(true)
+        -- Pressure: shoot immediately rather than waiting to settle.
+        if space < 10 or jumping then self.AutoPlayStatus="Contested shot";return true end
         if not self.SettlePosition or flat(root.Position-self.SettlePosition).Magnitude > 0.7 then
             self.SettlePosition,self.SettleSince=root.Position,self.Clock
         end
         local stationary = flat(root.AssemblyLinearVelocity).Magnitude < 3
-            or self.Clock-(self.SettleSince or self.Clock)>=0.2
+            or self.Clock-(self.SettleSince or self.Clock)>=0.12
         if not stationary then self.AutoPlayStatus="Stopping for shot";return false end
         self.OpenSince = self.OpenSince or self.Clock
         self.AutoPlayStatus="Open shot: settling"
-        return self.Clock-self.OpenSince >= 0.25
+        return self.Clock-self.OpenSince >= 0.12
     end
     self.OpenSince=nil
     self.SettlePosition,self.SettleSince=nil,nil
-    -- Stop on an open spot first; take the shot only after movement settles.
     if canShoot then self:StopAutoMove();self.AutoPlayStatus="Stopping for shot";return false end
     local params = self:MakeRayParams()
     if not self.LastPlan or self.Clock-self.LastPlan >= 0.35 or not self.ShotSpot then
