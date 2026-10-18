@@ -1,3 +1,5 @@
+Shot Delay default update (2026-10-18): default is now the existing slider minimum, 0.28 seconds (previously 0.32). Bounds and user adjustment remain unchanged. customizations.lua applies initializer root[6][1976]; startup preferences check verifies the default and displayed 0.28.
+
 Current update (2026-10-18): Mixed arc is the default, ordered Low / Mixed arc / High. It averages native aim offsets and Power values; shared Auto-play range is 58–73 studs. Native endpoint tests pass, but live accuracy is uncalibrated.
 
 New match.lua scopes holders, opponents and rebounds to a locked half court, retaining opponent and ball identity instead of selecting the first global holder. Opponent picker, Lock court here and Lock viewed hoop correct ambiguous adjacent courts. No verified game-specific court/team API exists; automatic nearest-hoop selection can require manual correction.
