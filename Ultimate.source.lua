@@ -34,7 +34,7 @@ local UltimatePreferences = {
     AutoGuardKey = "L", HideAimbotKeyPicker = true,
     Aimbot = true, AutoGuard = true, BallCheck = true,
     MatchTargetJump = true, AutoPlay = false,
-    BallMagnet = true, MagnetStrength = 50,
+    BallMagnet = false, MagnetStrength = 50,
     BallReach = true, ReachStrength = 10,
     WalkSpeed = 0.01, AntiDrop = true,
     LogoURL = "https://raw.githubusercontent.com/OfficialUltimateMacro/Ultimate-Hoopz/main/assets/ultimate-wordmark.png",

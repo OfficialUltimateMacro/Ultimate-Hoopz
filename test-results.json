@@ -10,7 +10,7 @@
   "Hoopz_mock_actions": 2474,
   "requested_defaults_verified": {
     "guardKey": "Enum.KeyCode.L",
-    "magnet": true,
+    "magnet": false,
     "guard": true,
     "basket": "Nearest",
     "dribble": true,
