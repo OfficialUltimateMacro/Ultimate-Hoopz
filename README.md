@@ -1,3 +1,15 @@
+Defender-clearance and tempo update (2026-10-18)
+
+Read user's abf97cd9 log:6/6 releases and6 near-rim passes; routing turnovers remain. Concrete fix: AttackMode previously passed an empty opponent list to SteerTo after the route timeout, disabling avoidance. It now retains real opponent reads.
+
+PossessionPathClear rejects route segments crossing an8-stud conservative buffer (up to+2 with opponent speed), against both current and predicted positions. Starting inside that buffer permits only separation-increasing exits. This is an avatar-clearance heuristic, not knowledge of Hoopz's hidden steal hitbox and not a no-contact guarantee. Escape commitments are cancelled/replaced when unsafe. Fan steering includes backward angles, desired endpoint spacing14studs, floor/wall checks and locked-court boundary checks. Dunk mode and off-ball defense/recovery keep their original approach rules.
+
+Input floor0.075s (was0.10), repeat cooldown0.16s (was0.20), R cooldown0.32s (was0.40). Key hold remains0.04s and game Action/manual/shot ownership gates remain. Full move pool now allowed from12studs (was16); close pressure retains protective moves. Native game acceptance and real steal rate unverified.
+
+New test_spacing verifies swept-body rejection despite clear endpoint, detour, retreat, court bounds, timeout reads,0.08s input acceptance and expanded variety. Full suite includes16 packaged suites plus startup. The shadow simulation now bounds defender movement at14studs/s rather than teleporting each frame. Under sustained6stud shadow pressure, spacing may choose a bounded safety fallback instead of forcing a shot; cutter and second-nearest scenarios still require real shot progress. Old committed-exit test now allows cancellation/replacement when defender movement makes the exit unsafe. Near-contact hesitation is suppressed. Do not describe this change as always maintaining8studs when the defender can close independently.
+
+---
+
 Aggressive possession shielding and diagnostics (2026-10-18)
 
 Latest user preference overrides prior open-lane restraint: randomized chains now continue during moving possession, including open lanes, at a0.10s decision floor. Nearby defenders restrict candidates to protective transfers/fakes; open lanes allow C/H/F/G/R/V/B. Avoid immediate duplicate moves; per-move cooldowns, active actions, manual control and shot/dunk ownership still apply. At contact an exposed-hand transfer gets priority, with wait as fallback when unavailable rather than an unsafe random crossover. This is not a promise of uninterrupted input or immunity to steals.

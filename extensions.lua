@@ -49,7 +49,7 @@ function Extension:CaptureTrace()
     local row=string.format("run="..tostring(self.RunSerial or 0).." T+%.2f state=%s pos=(%.1f,%.1f,%.1f) speed=%.1f rim=%.1f power=%s shield=%s setup=%s move=%s route=%s shot=%s",
         self.Clock-(self.AutoPlayStarted or 0),tostring(self.State),root.Position.X,root.Position.Y,root.Position.Z,
         root.AssemblyLinearVelocity.Magnitude,goal and distance(root.Position,goal.Position) or -1,power,
-        tostring(self.ProtectFacing==true),tostring(self.PreparingShot==true),tostring(self.DribbleStatus),
+        tostring(self.ProtectFacing==true),tostring(self.PreparingShot==true),tostring(self.DribbleStatus).." spacing="..tostring(self.SpacingReason or "-"),
         tostring(self.AutoPlayStatus),tostring(self.ShotBlockReason))
     self.TraceLog=self.TraceLog or {};table.insert(self.TraceLog,row)
     if #self.TraceLog>120 then table.remove(self.TraceLog,1) end

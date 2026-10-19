@@ -179,7 +179,7 @@ function Extension:RequestAutoJump(humanoid, root, valid)
 end
 function Extension:PulseKey(name, hold, cooldown, force)
     if self:IsManual() or self.Shooting then return false end
-    if not force and (not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.1) then return false end
+    if not force and (not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.075) then return false end
     local key = self.Environment.Enum.KeyCode[name]
     self.MoveCooldowns = self.MoveCooldowns or {}
     if self.Clock-(self.MoveCooldowns[name] or -100) < cooldown then return false end
@@ -221,7 +221,7 @@ function Extension:PulseDribble(name)
         end
         if self.Clock-(self.ActionSeenSince or self.Clock) < 0.6 then return false end
     else self.ActionSeenValue = nil end
-    return self:PulseKey(name, 0.04, name == "R" and 0.4 or 0.2)
+    return self:PulseKey(name, 0.04, name == "R" and 0.32 or 0.16)
 end
 
 ---------------------------------------------------------------------------
@@ -372,16 +372,36 @@ end
 -- Local fan steering with branch-and-bound: costs that need no raycasts are
 -- computed first; rays only run for candidates that can still win. The chosen
 -- point is identical to evaluating every candidate fully.
+-- Conservative avatar buffer, not a claim about the game's hidden steal volume.
+function Extension:PossessionPathClear(root,point,opponents)
+    if not heldBall(self.Player and self.Player.Character) or self.DunkMode then return true end
+    if self.MatchGoal and not self:MatchPosition(point) then self.SpacingReason="exit would leave locked court";return false end
+    for _,opponent in ipairs(opponents)do
+        local radius=8+math.min(2,(opponent.Velocity and opponent.Velocity.Magnitude or 0)*0.025)
+        for _,position in ipairs({opponent.Position,opponent.Predicted})do
+            local start=flat(root.Position-position).Magnitude
+            local finish=flat(point-position).Magnitude
+            local along=segmentDistance(position,root.Position,point)
+            if start>=radius then
+                if along<radius then self.SpacingReason="route intersects defender buffer";return false end
+            elseif finish<start+0.75 or along<start-0.1 then
+                self.SpacingReason="crowded: only separation-increasing exits allowed";return false
+            end
+        end
+    end
+    self.SpacingReason="clearance route accepted"
+    return true
+end
 function Extension:SteerTo(root, destination, opponents)
     local params = self:MakeRayParams()
     local delta = flat(destination-root.Position)
     if delta.Magnitude < 0.6 then return nil end
     local length = math.min(8,delta.Magnitude)
     local candidates = {}
-    for _, degrees in ipairs({0,-30,30,-60,60,-90,90}) do
+    for _, degrees in ipairs({0,-30,30,-60,60,-90,90,-120,120,-150,150,180}) do
         local point = root.Position+rotate(unit(delta),math.rad(degrees))*length
         local space = self:SpaceAt(point,opponents)
-        local cost = flat(destination-point).Magnitude + math.max(0,10-space)*3
+        local cost = flat(destination-point).Magnitude + math.max(0,14-space)*4
         for _, opponent in ipairs(opponents) do
             cost = cost + math.max(0,5-segmentDistance(opponent.Predicted,root.Position,point))*5
         end
@@ -406,7 +426,7 @@ function Extension:SteerTo(root, destination, opponents)
     for _, candidate in ipairs(candidates) do
         if candidate.Cost >= score then break end
         local point = candidate.Point
-        if self:WalkClear(root.Position,point,params) then
+        if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
             local total = candidate.Cost
             local ahead=point+unit(destination-point)*math.min(4,flat(destination-point).Magnitude)
             if not self:WalkClear(point,ahead,params) then total=total+14 end
@@ -646,12 +666,17 @@ function Extension:ChooseDribble(root, point, opponents, ball)
         -- Random fast chains preserve the protected hand rather than using
         -- a blind crossover or hand switch into the defender.
         add("R");add("V");add("B")
-        if not threat then add("C");add("H");add("F");add("G") end
+        if not threat or nearest>=12 then add("C");add("H");add("F");add("G")
+        elseif nearest>=8 and math.abs(hand)>0.2 then
+            -- At usable separation add a behind-the-back only toward the
+            -- free side; contact-range chains remain protective fakes.
+            if hand*safeSide<0 then add(safeSide>0 and "F" or "G") end
+        end
         for i=#candidates,2,-1 do local j=math.random(i);candidates[i],candidates[j]=candidates[j],candidates[i] end
     end
     for _,move in ipairs(candidates)do
         if self:PulseDribble(move) then
-            self.DribbleDecisionUntil=self.Clock+0.1
+            self.DribbleDecisionUntil=self.Clock+0.075
             self.DribbleStatus="Chain "..move.." | protect "..(safeSide>0 and "right" or "left")
             return
         end
@@ -677,7 +702,7 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local plan = self.Plan
     if plan then
         local reached = plan.Point and flat(plan.Point-root.Position).Magnitude < 1
-        if now < plan.Until and not reached then return plan end
+        if now < plan.Until and not reached and (not plan.Point or self:PossessionPathClear(root,plan.Point,opponents)) then return plan end
         self.Plan = nil
         if plan.Kind == "escape" then
             -- Completion check: did the escape create separation?
@@ -719,7 +744,7 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         -- At contact, create lateral/backward separation rather than driving
         -- through the handler's hands. Score both exits against every defender.
         local point=root.Position+lateral*side*7+forward*(gap<6 and -2 or 2)
-        if self:WalkClear(root.Position,point,params) then
+        if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
             local clearance=30
             for _,opponent in ipairs(opponents)do
                 clearance=math.min(clearance,flat(opponent.Predicted-point).Magnitude)
@@ -733,7 +758,7 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     if not chosen then return nil end
     self.EscapeCount = (self.EscapeCount or 0)+1
     self.LastEscapeSide = chosen.Side
-    if closingSpeed > 8 and gap >= 6 and gap < 10 and self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4 then
+    if closingSpeed > 8 and gap >= 9 and gap < 10 and self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4 then
         -- Hesitation: plant briefly with a fake-out, then escape away from
         -- where the defender committed.
         self.Plan = {Kind="hesitate", Until=now+0.22, Side=chosen.Side, Facing=forward}
@@ -896,7 +921,7 @@ function Extension:OffenseStep(character, humanoid, root)
     if plan and plan.Kind == "hesitate" then
         self:StopAutoMove();self.AutoPlayStatus="Hesitation: reading the defender";return false
     end
-    local point = plan and plan.Point or self:SteerTo(root,self.ShotSpot,self.AttackMode and {} or opponents)
+    local point = plan and plan.Point or self:SteerTo(root,self.ShotSpot,opponents)
     if point then
         self.AutoMovePoint=point
         if plan then self.AutoPlayStatus=(plan.Side>0 and "Escape right" or "Escape left")
