@@ -324,27 +324,25 @@ function Extension:RiskProfile(player,create)
     end
     return profile
 end
+function Extension:ResetRisk()
+    self.RiskProfiles={};self.AdaptiveRimOnly=false;self.AdaptiveReason=nil
+end
 function Extension:SyncRisk()
+    -- Outcome counters are diagnostics only. Never force an offensive strategy.
+    self.AdaptiveRimOnly=false
     local profile=self:RiskProfile(self.MatchOpponent,false)
-    local mode=profile and profile.RimOnly==true or false
-    if mode~=self.AdaptiveRimOnly then
-        self.AdaptiveRimOnly=mode;self.Plan,self.ShotSpot,self.LastPlan=nil,nil,nil
-    end
-    self.AdaptiveReason=profile and string.format("%s: losses=%d failed jumpers=%d",profile.Name or "opponent",profile.Turnovers,profile.Unreleased) or nil
+    self.AdaptiveReason=profile and string.format("Outcomes only: losses=%d failed jumpers=%d",profile.Turnovers,profile.Unreleased) or nil
 end
 function Extension:ObserveRisk(player,kind)
     local profile=self:RiskProfile(player,true);if not profile then return end
-    if self.Clock-profile.Updated>90 then profile.Turnovers,profile.Unreleased=0,0 end
     profile.Updated=self.Clock
-    if kind=="turnover" then profile.Turnovers=profile.Turnovers+1 else profile.Unreleased=profile.Unreleased+1 end
-    if not profile.RimOnly and (profile.Turnovers>=3 or profile.Unreleased>=2) then
-        profile.RimOnly=true
-        self:Log("adapt","Rim-only + hoop protection for "..tostring(profile.Name)..": repeated confirmed losses; cheating not established")
-    end
+    if kind=="turnover" then profile.Turnovers=profile.Turnovers+1
+    elseif kind=="jumper_not_released" then profile.Unreleased=profile.Unreleased+1
+    elseif kind=="jumper_released" then profile.Unreleased=0 end
+    profile.RimOnly=nil;profile.RimUntil=nil
     self:SyncRisk()
 end
 function Extension:CanTakeShot(root)
-    if self.AdaptiveRimOnly then self.ShotBlockReason="Adaptive rim-only: jumpers suspended";return false end
     local goal = self.OffenseGoal
     if not goal or not goal.Parent then self.ShotBlockReason="No attack basket selected";return false end
     if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
@@ -414,7 +412,7 @@ function Extension:PossessionPathClear(root,point,opponents)
     if not heldBall(self.Player and self.Player.Character) then return true end
     if self.MatchGoal and not self:MatchPosition(point) then self.SpacingReason="exit would leave locked court";return false end
     for _,opponent in ipairs(opponents)do
-        local radius=(self.AdaptiveRimOnly and 10 or 8)+math.min(2,(opponent.Velocity and opponent.Velocity.Magnitude or 0)*0.025)
+        local radius=8+math.min(2,(opponent.Velocity and opponent.Velocity.Magnitude or 0)*0.025)
         for _,position in ipairs({opponent.Position,opponent.Predicted})do
             local start=flat(root.Position-position).Magnitude
             local finish=flat(point-position).Magnitude
@@ -760,8 +758,7 @@ function Extension:EscapeMove(side, hand, square)
 
 end
 -- Commit to a short lateral escape or hesitation when an on-ball defender
--- is in the path. Committed plans prevent left/right flip-flopping; a cap per
--- possession prevents endless circling.
+-- is in the path. Committed plans prevent left/right flip-flopping; every exit is revalidated before continuing.
 function Extension:PlanEscape(root, destination, opponents, ball)
     local now = self.Clock
     local plan = self.Plan
@@ -778,10 +775,10 @@ function Extension:PlanEscape(root, destination, opponents, ball)
             self.EscapeFailed = self.EscapeFailed or {}
             self.EscapeFailed[plan.Side] = still and now or nil
         end
-        if plan.Kind == "hesitate" then self.NextEscape = now else self.NextEscape = now+0.7 end
+        if plan.Kind == "hesitate" then self.NextEscape = now else self.NextEscape = now+0.15 end
         plan = nil
     end
-    if (self.EscapeCount or 0) >= 4 or now < (self.NextEscape or -100) then return nil end
+    if now < (self.NextEscape or -100) then return nil end
     local forward = unit(flat(destination-root.Position))
     local lateral = lateralOf(forward)
     local defender, gap = nil, 10
@@ -805,10 +802,11 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local failed = self.EscapeFailed or {}
     if failed[preferred] and now-failed[preferred] < 2 then preferred = -preferred end
     local chosen,bestScore=nil,-math.huge
-    for _,side in ipairs({preferred,-preferred})do
+    for _,exit in ipairs({{preferred,7,-3},{-preferred,7,-3},{preferred,4,-7},{-preferred,4,-7},{preferred,9,1},{-preferred,9,1}})do
+        local side=exit[1]
         -- At contact, create lateral/backward separation rather than driving
         -- through the handler's hands. Score both exits against every defender.
-        local point=root.Position+lateral*side*7+forward*(gap<6 and -2 or 2)
+        local point=root.Position+lateral*side*exit[2]+forward*(gap<8 and exit[3] or math.max(0,exit[3]))
         if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
             local clearance=30
             for _,opponent in ipairs(opponents)do
@@ -841,7 +839,7 @@ end
 -- Dunks
 ---------------------------------------------------------------------------
 function Extension:TryDunk(root, goal)
-    if self:SpaceAt(root.Position,self.OpponentReads or {})<(self.AdaptiveRimOnly and 10 or 8) then self.ShotBlockReason="Dunk lane crowded: waiting for clearance";return false end
+    if self:SpaceAt(root.Position,self.OpponentReads or {})<8 then self.ShotBlockReason="Dunk lane crowded: waiting for clearance";return false end
     local reach=flat(goal.Position-root.Position).Magnitude
     if reach>(self.DunkReach or 9) then return false end
     local axis=unit(flat(root.Position-goal.Position))
@@ -901,7 +899,7 @@ function Extension:OffenseStep(character, humanoid, root)
     -- drive and dunk instead of backing out. Also drive from the near edge of
     -- the ring when pressed hard and the corridor to the rim is empty.
     if self.Settings.AutoPlayDunk ~= false then
-        if self.AdaptiveRimOnly or rimDistance < minimum-3 then self.DunkMode=true
+        if rimDistance < minimum-3 then self.DunkMode=true
         elseif rimDistance > minimum and not (self.DriveUntil and now < self.DriveUntil) then self.DunkMode=false end
         if not self.DunkMode and space < 5 and rimDistance < 64 and held < 5 then
             local corridor = true
@@ -1021,6 +1019,7 @@ function Extension:FinishShotTrack(text)
     local track = self.ShotTrack
     self.ShotTrack = nil
     if not track then return end
+    if track.Kind=="Shot" and track.Released then self:ObserveRisk(self.MatchOpponent,"jumper_released") end
     if track.Kind=="Shot" and not track.Released and (text:find("ball taken") or text:find("still held")) then
         self:ObserveRisk(self.MatchOpponent,"jumper_not_released")
     end

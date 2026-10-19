@@ -487,6 +487,11 @@ function Extension:Tick(dt)
     if not self.Alive or not self.Settings then return end
     self.Clock = self.Clock + math.max(0, math.min(dt, 0.5))
     if self.Settings.AutoPlay and self.Settings.AutoGuard then self:EnforceGuardOff(false) end
+    if self.LocalHeadphonesEnabled and self.UpdateLocalHeadphones and self.Clock>=(self.NextHeadphonesUpdate or -100) then
+        self.NextHeadphonesUpdate=self.Clock+0.5
+        local ok,message=pcall(self.UpdateLocalHeadphones,self)
+        if not ok then self:MusicStatus("Headphones unavailable: "..tostring(message)) end
+    end
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     if self.ShotTrack and self.TrackShot then self:TrackShot() end
     self:CaptureTrace()
@@ -730,6 +735,10 @@ function Extension:InstallControls(section)
     end})
     section:NewButton({Title="Lock court here",Callback=function() self:LockMatch() end})
     section:NewButton({Title="Lock viewed hoop",Callback=function() self:LockViewedHoop() end})
+    self.LocalHeadphonesToggle=section:NewToggle({Title="Local headphones",Default=false,Callback=function(value)
+        self:SetLocalHeadphones(value)
+    end})
+    section:NewButton({Title="Music controls",Callback=function()self:OpenLocalMusicPanel()end})
     section:NewToggle({Title = "Player collisions", Default = false, Callback = function(value)
         self:SetPlayerCollisions(value)
     end})
@@ -798,6 +807,7 @@ end
 function Extension:Destroy()
     if not self.Alive then return end
     self:SetAutoPlay(false)
+    if self.DestroyLocalHeadphones then self:DestroyLocalHeadphones() end
     self:SetPlayerCollisions(false)
     if self.ResetOffense then self:ResetOffense() end
     self:ClearTarget(); self:StopAutoMove()
@@ -1241,27 +1251,25 @@ function Extension:RiskProfile(player,create)
     end
     return profile
 end
+function Extension:ResetRisk()
+    self.RiskProfiles={};self.AdaptiveRimOnly=false;self.AdaptiveReason=nil
+end
 function Extension:SyncRisk()
+    -- Outcome counters are diagnostics only. Never force an offensive strategy.
+    self.AdaptiveRimOnly=false
     local profile=self:RiskProfile(self.MatchOpponent,false)
-    local mode=profile and profile.RimOnly==true or false
-    if mode~=self.AdaptiveRimOnly then
-        self.AdaptiveRimOnly=mode;self.Plan,self.ShotSpot,self.LastPlan=nil,nil,nil
-    end
-    self.AdaptiveReason=profile and string.format("%s: losses=%d failed jumpers=%d",profile.Name or "opponent",profile.Turnovers,profile.Unreleased) or nil
+    self.AdaptiveReason=profile and string.format("Outcomes only: losses=%d failed jumpers=%d",profile.Turnovers,profile.Unreleased) or nil
 end
 function Extension:ObserveRisk(player,kind)
     local profile=self:RiskProfile(player,true);if not profile then return end
-    if self.Clock-profile.Updated>90 then profile.Turnovers,profile.Unreleased=0,0 end
     profile.Updated=self.Clock
-    if kind=="turnover" then profile.Turnovers=profile.Turnovers+1 else profile.Unreleased=profile.Unreleased+1 end
-    if not profile.RimOnly and (profile.Turnovers>=3 or profile.Unreleased>=2) then
-        profile.RimOnly=true
-        self:Log("adapt","Rim-only + hoop protection for "..tostring(profile.Name)..": repeated confirmed losses; cheating not established")
-    end
+    if kind=="turnover" then profile.Turnovers=profile.Turnovers+1
+    elseif kind=="jumper_not_released" then profile.Unreleased=profile.Unreleased+1
+    elseif kind=="jumper_released" then profile.Unreleased=0 end
+    profile.RimOnly=nil;profile.RimUntil=nil
     self:SyncRisk()
 end
 function Extension:CanTakeShot(root)
-    if self.AdaptiveRimOnly then self.ShotBlockReason="Adaptive rim-only: jumpers suspended";return false end
     local goal = self.OffenseGoal
     if not goal or not goal.Parent then self.ShotBlockReason="No attack basket selected";return false end
     if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
@@ -1331,7 +1339,7 @@ function Extension:PossessionPathClear(root,point,opponents)
     if not heldBall(self.Player and self.Player.Character) then return true end
     if self.MatchGoal and not self:MatchPosition(point) then self.SpacingReason="exit would leave locked court";return false end
     for _,opponent in ipairs(opponents)do
-        local radius=(self.AdaptiveRimOnly and 10 or 8)+math.min(2,(opponent.Velocity and opponent.Velocity.Magnitude or 0)*0.025)
+        local radius=8+math.min(2,(opponent.Velocity and opponent.Velocity.Magnitude or 0)*0.025)
         for _,position in ipairs({opponent.Position,opponent.Predicted})do
             local start=flat(root.Position-position).Magnitude
             local finish=flat(point-position).Magnitude
@@ -1677,8 +1685,7 @@ function Extension:EscapeMove(side, hand, square)
 
 end
 -- Commit to a short lateral escape or hesitation when an on-ball defender
--- is in the path. Committed plans prevent left/right flip-flopping; a cap per
--- possession prevents endless circling.
+-- is in the path. Committed plans prevent left/right flip-flopping; every exit is revalidated before continuing.
 function Extension:PlanEscape(root, destination, opponents, ball)
     local now = self.Clock
     local plan = self.Plan
@@ -1695,10 +1702,10 @@ function Extension:PlanEscape(root, destination, opponents, ball)
             self.EscapeFailed = self.EscapeFailed or {}
             self.EscapeFailed[plan.Side] = still and now or nil
         end
-        if plan.Kind == "hesitate" then self.NextEscape = now else self.NextEscape = now+0.7 end
+        if plan.Kind == "hesitate" then self.NextEscape = now else self.NextEscape = now+0.15 end
         plan = nil
     end
-    if (self.EscapeCount or 0) >= 4 or now < (self.NextEscape or -100) then return nil end
+    if now < (self.NextEscape or -100) then return nil end
     local forward = unit(flat(destination-root.Position))
     local lateral = lateralOf(forward)
     local defender, gap = nil, 10
@@ -1722,10 +1729,11 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local failed = self.EscapeFailed or {}
     if failed[preferred] and now-failed[preferred] < 2 then preferred = -preferred end
     local chosen,bestScore=nil,-math.huge
-    for _,side in ipairs({preferred,-preferred})do
+    for _,exit in ipairs({{preferred,7,-3},{-preferred,7,-3},{preferred,4,-7},{-preferred,4,-7},{preferred,9,1},{-preferred,9,1}})do
+        local side=exit[1]
         -- At contact, create lateral/backward separation rather than driving
         -- through the handler's hands. Score both exits against every defender.
-        local point=root.Position+lateral*side*7+forward*(gap<6 and -2 or 2)
+        local point=root.Position+lateral*side*exit[2]+forward*(gap<8 and exit[3] or math.max(0,exit[3]))
         if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
             local clearance=30
             for _,opponent in ipairs(opponents)do
@@ -1758,7 +1766,7 @@ end
 -- Dunks
 ---------------------------------------------------------------------------
 function Extension:TryDunk(root, goal)
-    if self:SpaceAt(root.Position,self.OpponentReads or {})<(self.AdaptiveRimOnly and 10 or 8) then self.ShotBlockReason="Dunk lane crowded: waiting for clearance";return false end
+    if self:SpaceAt(root.Position,self.OpponentReads or {})<8 then self.ShotBlockReason="Dunk lane crowded: waiting for clearance";return false end
     local reach=flat(goal.Position-root.Position).Magnitude
     if reach>(self.DunkReach or 9) then return false end
     local axis=unit(flat(root.Position-goal.Position))
@@ -1818,7 +1826,7 @@ function Extension:OffenseStep(character, humanoid, root)
     -- drive and dunk instead of backing out. Also drive from the near edge of
     -- the ring when pressed hard and the corridor to the rim is empty.
     if self.Settings.AutoPlayDunk ~= false then
-        if self.AdaptiveRimOnly or rimDistance < minimum-3 then self.DunkMode=true
+        if rimDistance < minimum-3 then self.DunkMode=true
         elseif rimDistance > minimum and not (self.DriveUntil and now < self.DriveUntil) then self.DunkMode=false end
         if not self.DunkMode and space < 5 and rimDistance < 64 and held < 5 then
             local corridor = true
@@ -1938,6 +1946,7 @@ function Extension:FinishShotTrack(text)
     local track = self.ShotTrack
     self.ShotTrack = nil
     if not track then return end
+    if track.Kind=="Shot" and track.Released then self:ObserveRisk(self.MatchOpponent,"jumper_released") end
     if track.Kind=="Shot" and not track.Released and (text:find("ball taken") or text:find("still held")) then
         self:ObserveRisk(self.MatchOpponent,"jumper_not_released")
     end
@@ -2037,6 +2046,8 @@ function Extension:LockMatch(goal)
     goal=goal or self:NearestGoal(root,self.Settings.AutoPlayBasket)
     self.MatchGoal,self.MatchChoice=goal,self.Settings.AutoPlayBasket
     self.MatchOpponent=nil
+    self.TurnoverRetreat,self.TurnoverAt=nil,nil
+    if self.ResetRisk then self:ResetRisk() end
     self.MatchAnchor=root.Position
     self.ContextReason=goal and "court locked at local player" or "no local basket"
     self.DefenseGoal,self.LastDefenseTarget,self.Holder=nil,nil,nil
@@ -2233,11 +2244,8 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     -- How far along the attacker->rim axis we are; <= 0.5 means level/behind.
     local along = dflat(here-attackerFlat):Dot(direction)
     local mode, spacing
-    if self.TurnoverRetreat and (along>3 or rimDistance<10) then self.TurnoverRetreat=nil end
-    local risk=self:RiskProfile(attacker,false)
-    if risk and risk.RimOnly and rimDistance>18 then
-        mode="Adaptive hoop protection";spacing=math.max(4,rimDistance-9)
-    elseif self.TurnoverRetreat and along<3 then
+    if self.TurnoverRetreat and (along>3 or rimDistance<10 or self.Clock-(self.TurnoverAt or self.Clock)>2.5) then self.TurnoverRetreat=nil end
+    if self.TurnoverRetreat and along<3 then
         mode="Transition: protect hoop"
         spacing=math.max(4,rimDistance-10)
     elseif along < 0.5 then
@@ -2296,6 +2304,163 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     self.AutoMovePoint = target
     self.DefenseIntent = mode
     return target
+end
+
+-- Custom client-created cosmetic and local Sound; no pass/ownership remotes.
+function Extension:MusicStatus(text)
+    self.LocalMusicStatus=text
+    if self.MusicStatusLabel then pcall(function()self.MusicStatusLabel.Text=text end) end
+end
+function Extension:RemoveHeadphonesModel()
+    if self.LocalHeadphonesModel then pcall(function()self.LocalHeadphonesModel:Destroy()end) end
+    self.LocalHeadphonesModel,self.LocalHeadphonesHead=nil,nil
+end
+function Extension:UpdateLocalHeadphones()
+    if not self.LocalHeadphonesEnabled then return end
+    local character=self.Player and self.Player.Character
+    local head=character and character:FindFirstChild("Head")
+    if self.LocalHeadphonesModel and self.LocalHeadphonesModel.Parent==character
+        and self.LocalHeadphonesHead==head then return end
+    self:RemoveHeadphonesModel()
+    if not head or not head:IsA("BasePart") then self:MusicStatus("Waiting for your character's head");return end
+    local env=self.Environment
+    local model=env.Instance.new("Model");model.Name="UltimateLocalHeadphones"
+    self.LocalHeadphonesModel=model
+    local ok,err=pcall(function()
+        local width=math.max(.35,head.Size.X/2)
+        local top=head.Size.Y/2+.12
+        local dark=env.Color3.fromRGB(24,26,39)
+        local cushion=env.Color3.fromRGB(10,11,17)
+        local accent=env.Color3.fromRGB(255,95,163)
+        local function piece(name,size,offset,color,neon)
+            local part=env.Instance.new("Part");part.Name=name;part.Size=size
+            part.Anchored=false;part.Massless=true;part.CanCollide=false;part.CanTouch=false;part.CanQuery=false
+            part.Color=color;part.Material=neon and env.Enum.Material.Neon or env.Enum.Material.SmoothPlastic
+            part.CFrame=head.CFrame*env.CFrame.new(offset.X,offset.Y,offset.Z)
+            part.Parent=model
+            local weld=env.Instance.new("WeldConstraint");weld.Part0=head;weld.Part1=part;weld.Parent=part
+        end
+        local v=env.Vector3.new
+        piece("BandTop",v(width*2+.28,.13,.3),v(0,top,0),dark)
+        piece("BandAccent",v(width*2+.15,.035,.14),v(0,top+.075,0),accent,true)
+        for _,side in ipairs({-1,1})do
+            local tag=side<0 and "Left" or "Right"
+            piece(tag.."Band",v(.12,top,.3),v(side*(width+.08),top/2,0),dark)
+            piece(tag.."Cushion",v(.16,.63,.59),v(side*(width+.04),0,0),cushion)
+            piece(tag.."Cup",v(.25,.72,.65),v(side*(width+.23),0,0),dark)
+            piece(tag.."Accent",v(.035,.42,.35),v(side*(width+.375),0,0),accent,true)
+        end
+        model.Parent=character;self.LocalHeadphonesHead=head
+    end)
+    if not ok then self:RemoveHeadphonesModel();self:MusicStatus("Headphone visual unavailable: "..tostring(err)) end
+end
+function Extension:StopLocalMusic()
+    if self.LocalMusicLoaded then disconnect(self.LocalMusicLoaded);self.LocalMusicLoaded=nil end
+    local sound=self.LocalMusicSound;self.LocalMusicSound=nil
+    if sound then pcall(function()sound:Stop();sound:Destroy()end) end
+    self:MusicStatus(self.LocalHeadphonesEnabled and "Music stopped (local only)" or "Local headphones off")
+end
+function Extension:SetLocalHeadphones(enabled)
+    self.LocalHeadphonesEnabled=enabled==true and self.Alive
+    if self.LocalHeadphonesToggle and not self.HeadphoneToggleSync then
+        self.HeadphoneToggleSync=true
+        pcall(self.LocalHeadphonesToggle.SetValue,self.LocalHeadphonesEnabled)
+        self.HeadphoneToggleSync=false
+    end
+    if not self.LocalHeadphonesEnabled then self:StopLocalMusic();self:RemoveHeadphonesModel();return end
+    self:UpdateLocalHeadphones()
+    if not self.LocalMusicSound then self:MusicStatus("Headphones on; enter an audio ID to play") end
+end
+function Extension:PlayLocalMusic(raw,volume)
+    if not self.Alive then return false end
+    local value=tostring(raw or ""):match("^%s*(.-)%s*$")
+    local id=value:match("^(%d+)$") or value:match("^rbxassetid://(%d+)$")
+    if not id or #id>20 or not id:find("[1-9]") then self:MusicStatus("Enter a numeric Roblox audio ID");return false end
+    self:StopLocalMusic();self.LocalMusicID=id
+    self.LocalMusicVolume=math.max(0,math.min(1,tonumber(volume) or self.LocalMusicVolume or .35))
+    self:SetLocalHeadphones(true)
+    local sound
+    local ok,err=pcall(function()
+        sound=self.Environment.Instance.new("Sound");self.LocalMusicSound=sound
+        sound.Name="UltimateLocalMusic";sound.SoundId="rbxassetid://"..id
+        sound.Volume=self.LocalMusicVolume;sound.Looped=true
+        sound.Parent=self.Environment.game:GetService("SoundService")
+        if sound.Loaded then self.LocalMusicLoaded=sound.Loaded:Connect(function()
+            if self.LocalMusicSound==sound then self:MusicStatus("Playing locally: "..id) end
+        end) end
+        self:MusicStatus("Loading audio (must be available to this experience)")
+        sound:Play()
+        if sound.IsLoaded then self:MusicStatus("Playing locally: "..id) end
+        self.Environment.task.delay(8,function()
+            if self.LocalMusicSound==sound and not sound.IsLoaded then
+                self:MusicStatus("Audio did not load; check ID and audio permissions")
+            end
+        end)
+    end)
+    if not ok then self:StopLocalMusic();self:MusicStatus("Local audio unavailable: "..tostring(err));return false end
+    return true
+end
+function Extension:OpenLocalMusicPanel()
+    if not self.Alive then return end
+    if self.LocalMusicPanel and self.LocalMusicPanel.Parent then self.LocalMusicPanel.Visible=true;return end
+    local env=self.Environment
+    local parent=self.Screen
+    if not parent then
+        local playerGui=self.Player and self.Player:FindFirstChildOfClass("PlayerGui")
+        if not playerGui then self:MusicStatus("Music controls unavailable: no local GUI");return end
+        parent=env.Instance.new("ScreenGui");parent.Name="UltimateLocalMusicGui";parent.ResetOnSpawn=false;parent.Parent=playerGui
+        self.LocalMusicOwnedGui=parent
+    end
+    local function make(class,properties,parentObject)
+        local item=env.Instance.new(class)
+        for key,value in pairs(properties)do item[key]=value end
+        item.Parent=parentObject;return item
+    end
+    local panel=make("Frame",{Name="UltimateLocalMusicPanel",Size=env.UDim2.new(0,330,0,220),Position=env.UDim2.new(.5,-165,.5,-110),BackgroundColor3=env.Color3.fromRGB(17,23,39),BorderSizePixel=0,Active=true,ZIndex=100},parent)
+    self.LocalMusicPanel=panel
+    make("UICorner",{CornerRadius=env.UDim.new(0,8)},panel)
+    local function text(class,name,caption,x,y,w,h)
+        return make(class,{Name=name,Text=caption,Position=env.UDim2.new(0,x,0,y),Size=env.UDim2.new(0,w,0,h),BackgroundColor3=env.Color3.fromRGB(29,37,56),TextColor3=env.Color3.fromRGB(245,245,250),BorderSizePixel=0,TextSize=14,Font=env.Enum.Font.Gotham,ZIndex=101},panel)
+    end
+    local title=text("TextLabel","Title","Ultimate | Local music",10,8,270,28)
+    title.Active=true
+    local close=text("TextButton","Close","X",290,8,30,28)
+    local id=text("TextBox","AudioId",self.LocalMusicID or "",10,46,310,32)
+    id.PlaceholderText="Roblox audio ID";id.ClearTextOnFocus=false
+    local volumeLabel=text("TextLabel","VolumeLabel","Volume (0-100)",10,88,160,28)
+    local volume=text("TextBox","Volume",tostring(math.floor((self.LocalMusicVolume or .35)*100)),180,88,140,28)
+    volume.ClearTextOnFocus=false
+    local play=text("TextButton","Play","Play",10,126,150,30)
+    local stop=text("TextButton","Stop","Stop",170,126,150,30)
+    self.MusicStatusLabel=text("TextLabel","Status",self.LocalMusicStatus or "Local only; headphones are custom cosmetics",10,166,310,44)
+    self.MusicStatusLabel.TextWrapped=true
+    self:Connect(close.Activated,function()panel.Visible=false end)
+    self:Connect(play.Activated,function()self:PlayLocalMusic(id.Text,(tonumber(volume.Text) or 35)/100)end)
+    self:Connect(stop.Activated,function()self:StopLocalMusic()end)
+    self:Connect(volume.FocusLost,function()
+        local amount=math.max(0,math.min(100,tonumber(volume.Text) or 35))
+        volume.Text=tostring(amount);self.LocalMusicVolume=amount/100
+        if self.LocalMusicSound then self.LocalMusicSound.Volume=amount/100 end
+    end)
+    local dragStart,origin
+    self:Connect(title.InputBegan,function(input)
+        if input.UserInputType==env.Enum.UserInputType.MouseButton1 or input.UserInputType==env.Enum.UserInputType.Touch then dragStart,origin=input.Position,panel.Position end
+    end)
+    self:Connect(self.Input.InputChanged,function(input)
+        if dragStart and (input.UserInputType==env.Enum.UserInputType.MouseMovement or input.UserInputType==env.Enum.UserInputType.Touch) then
+            local delta=input.Position-dragStart
+            panel.Position=env.UDim2.new(origin.X.Scale,origin.X.Offset+delta.X,origin.Y.Scale,origin.Y.Offset+delta.Y)
+        end
+    end)
+    self:Connect(self.Input.InputEnded,function(input)
+        if input.UserInputType==env.Enum.UserInputType.MouseButton1 or input.UserInputType==env.Enum.UserInputType.Touch then dragStart,origin=nil,nil end
+    end)
+end
+function Extension:DestroyLocalHeadphones()
+    self:SetLocalHeadphones(false)
+    if self.LocalMusicPanel then pcall(function()self.LocalMusicPanel:Destroy()end) end
+    if self.LocalMusicOwnedGui then pcall(function()self.LocalMusicOwnedGui:Destroy()end) end
+    self.LocalMusicPanel,self.MusicStatusLabel,self.LocalMusicOwnedGui=nil,nil,nil
 end
 
 prototypes["root"]={};prototypeNames[prototypes["root"]]="root"

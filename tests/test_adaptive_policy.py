@@ -19,12 +19,12 @@ e:SetAutoPlay(false);assert(s.AutoGuard,'previous standalone setting restored af
 e:SetAutoPlay(true);e.MatchOpponent=F.enemy
 local root=F.root;root.Position=v(100,3,0);F.er.Position=v(80,3,0)
 e:ObserveRisk(F.enemy,'jumper_not_released');assert(not e.AdaptiveRimOnly,'one failure does not classify opponent')
-e:ObserveRisk(F.enemy,'jumper_not_released');assert(e.AdaptiveRimOnly and e:RiskProfile(F.enemy,false).Unreleased==2,'repeated failed jumpers adapt without cheat accusation')
+e:ObserveRisk(F.enemy,'jumper_not_released');assert(not e.AdaptiveRimOnly and e:RiskProfile(F.enemy,false).Unreleased==2,'failed releases remain diagnostics only')
 e.Clock=5;e.OffenseCharacter=F.own.Character;e.OffenseGoal=F.goal;e:OffenseStep(F.own.Character,F.oh,root)
-assert(e.DunkMode and not e:CanTakeShot(root),'rim-only strategy suppresses threes')
+assert(not e.DunkMode,'failed releases do not force a rim drive')
 F.enemy.Character.ball=F.container(F.enemy.Character,true);F.own.Character.ball:SetBall(false)
 e.State='Opponent';local target=e:DefenseStep(F.own.Character,F.oh,root,F.enemy)
-assert(e.DefenseMode=='Adaptive hoop protection' and target and (target-v(0,3,0)).Magnitude<20,'risk policy protects hoop instead of chasing perimeter')
+assert(e.DefenseMode~='Adaptive hoop protection' and target,'offensive adaptation does not force hoop camping')
 local other=F.player(v(200,3,0),'DifferentOpponent');e.MatchOpponent=other;e:SyncRisk();assert(not e.AdaptiveRimOnly,'adaptation is opponent-specific')
 F.own.Character.ball:SetBall(true);root.Position=v(64,3,0);e.OffenseGoal=F.goal;e.ForceShot=true
 e.OpponentReads={{Player=F.enemy,Position=v(65,3,0),Predicted=v(65,3,0),Velocity=v()}}
@@ -40,7 +40,9 @@ local before=e.DunkAttempts or 0;e:OffenseStep(F.own.Character,F.oh,root)
 assert(not e.AutoMovePoint and (e.DunkAttempts or 0)==before,'no raw rim fallback or T input when floor support unavailable')
 local third=F.player(v(80,3,0),'ReleaseFailureOpponent');e.MatchOpponent=third;e:SyncRisk()
 for i=1,2 do e.ShotTrack={Kind='Shot',Released=false};e:FinishShotTrack('Not a release: ball taken by opponent') end
-assert(e.AdaptiveRimOnly,'actual shot-result handler feeds opponent adaptation')
+assert(not e.AdaptiveRimOnly,'shot-result failures cannot force rim-only')
+for i=1,20 do e:ObserveRisk(third,'turnover') end
+assert(not e.AdaptiveRimOnly,'ordinary turnovers never force strategy')
 return 'PASS: guard lock across key/UI/mobile/external edits, off notice and restoration; opponent-specific adaptation, clear-space shots, hoop protection, protective waiting and safe dunk gating'
 '''
 print(run(lua.replace('FIXTURE',fixture).replace('SOURCE','[====['+source+']====]')).decode())

@@ -20,6 +20,8 @@ function Extension:LockMatch(goal)
     goal=goal or self:NearestGoal(root,self.Settings.AutoPlayBasket)
     self.MatchGoal,self.MatchChoice=goal,self.Settings.AutoPlayBasket
     self.MatchOpponent=nil
+    self.TurnoverRetreat,self.TurnoverAt=nil,nil
+    if self.ResetRisk then self:ResetRisk() end
     self.MatchAnchor=root.Position
     self.ContextReason=goal and "court locked at local player" or "no local basket"
     self.DefenseGoal,self.LastDefenseTarget,self.Holder=nil,nil,nil

@@ -383,6 +383,11 @@ function Extension:Tick(dt)
     if not self.Alive or not self.Settings then return end
     self.Clock = self.Clock + math.max(0, math.min(dt, 0.5))
     if self.Settings.AutoPlay and self.Settings.AutoGuard then self:EnforceGuardOff(false) end
+    if self.LocalHeadphonesEnabled and self.UpdateLocalHeadphones and self.Clock>=(self.NextHeadphonesUpdate or -100) then
+        self.NextHeadphonesUpdate=self.Clock+0.5
+        local ok,message=pcall(self.UpdateLocalHeadphones,self)
+        if not ok then self:MusicStatus("Headphones unavailable: "..tostring(message)) end
+    end
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     if self.ShotTrack and self.TrackShot then self:TrackShot() end
     self:CaptureTrace()
@@ -626,6 +631,10 @@ function Extension:InstallControls(section)
     end})
     section:NewButton({Title="Lock court here",Callback=function() self:LockMatch() end})
     section:NewButton({Title="Lock viewed hoop",Callback=function() self:LockViewedHoop() end})
+    self.LocalHeadphonesToggle=section:NewToggle({Title="Local headphones",Default=false,Callback=function(value)
+        self:SetLocalHeadphones(value)
+    end})
+    section:NewButton({Title="Music controls",Callback=function()self:OpenLocalMusicPanel()end})
     section:NewToggle({Title = "Player collisions", Default = false, Callback = function(value)
         self:SetPlayerCollisions(value)
     end})
@@ -694,6 +703,7 @@ end
 function Extension:Destroy()
     if not self.Alive then return end
     self:SetAutoPlay(false)
+    if self.DestroyLocalHeadphones then self:DestroyLocalHeadphones() end
     self:SetPlayerCollisions(false)
     if self.ResetOffense then self:ResetOffense() end
     self:ClearTarget(); self:StopAutoMove()
