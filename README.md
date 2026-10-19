@@ -1,3 +1,5 @@
+Default preferences update (2026-10-18): Ball Magnet remains off at startup; Ball Reach remains enabled with Reach Strength now2, previously10. Auto-play still applies its existing temporary feature toggles while enabled and restores them afterward. Other defaults unchanged.
+
 Defender-clearance and tempo update (2026-10-18)
 
 Read user's abf97cd9 log:6/6 releases and6 near-rim passes; routing turnovers remain. Concrete fix: AttackMode previously passed an empty opponent list to SteerTo after the route timeout, disabling avoidance. It now retains real opponent reads.
