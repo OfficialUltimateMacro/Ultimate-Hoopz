@@ -31,7 +31,7 @@ e.AutoMovePoint=nil;face=e:DesiredFacing(root)
 assert(e.ProtectFacing,'stationary possession remains shielded before setup')
 e.PreparingShot=true;face=e:DesiredFacing(root);assert(not e.ProtectFacing and face:Dot((F.goal.Position-root.Position).Unit)>0.95,'square to hoop when preparing shot')
 e.PreparingShot=false
-e.AutoMovePoint=root.Position+v(-3,0,6);e.DunkMode=true;e:DesiredFacing(root)
+e.AutoMovePoint=root.Position+v(-3,0,6);e.DunkMode=true;root.Position=v(8,3,0);e:DesiredFacing(root)
 assert(not e.ProtectFacing,'dunk approach does not turn back to rim')
 F.own.Character.attrs.Action='Dunking';assert(not e:PulseDribble('C'));e.Clock=20;assert(not e:PulseDribble('C'),'never dribble during dunk even with stale action')
 return 'PASS: safe hand transfer, protected-hand retention, no random cooldown fallback, commitment, open-lane randomized chains and dunk input exclusion'

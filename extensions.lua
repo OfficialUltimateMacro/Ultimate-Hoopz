@@ -110,7 +110,21 @@ function Extension:SelectTarget(player)
         self:MirrorJump(player, humanoid)
     end
 end
+function Extension:GuardOffNotice()
+    local captures=self.InputCaptures
+    if captures and captures[2] and type(captures[2].Notification)=="function" then
+        pcall(function() captures[2].Notification().new({Title="Auto Guard",Description="Disabled (Auto-play handles defense)",Duration=2}) end)
+    end
+end
+function Extension:EnforceGuardOff(notify)
+    if not self.Settings or not self.Settings.AutoPlay or self.GuardUISync then return end
+    self.GuardUISync=true
+    self:SetFeature("AutoGuard",false)
+    self.GuardUISync=false
+    if notify then self:GuardOffNotice() end
+end
 function Extension:SetFeature(name, value)
+    if name=="AutoGuard" and self.Settings.AutoPlay then value=false end
     local captures = self.InputCaptures
     local toggle = captures and captures[name == "Aimbot" and 1 or (name == "AutoGuard" and 3 or -1)]
     self.Settings[name] = value
@@ -133,12 +147,12 @@ function Extension:GuardKey(input, processed, captures)
     end
     if not settings or input.KeyCode ~= settings.AutoGuardKeybind then return end
     self.Settings, self.InputCaptures = settings, captures
-    local enabled = not settings.AutoGuard
+    local enabled = not settings.AutoPlay and not settings.AutoGuard
     self:SetFeature("AutoGuard", enabled)
     -- Guard-only notification: never fall through into the old Aimbot branch.
     if captures[2] and type(captures[2].Notification) == "function" then
         pcall(function()
-            captures[2].Notification().new({Title = "Auto Guard", Description = enabled and "Enabled" or "Disabled", Duration = 2})
+            captures[2].Notification().new({Title = "Auto Guard", Description = enabled and "Enabled" or (settings.AutoPlay and "Disabled (Auto-play handles defense)" or "Disabled"), Duration = 2})
         end)
     end
 end
@@ -172,6 +186,7 @@ function Extension:SetAutoPlay(enabled)
         self.AutoPlayStarted, self.State, self.StateSince = self.Clock, nil, self.Clock
         self.AutoPlayStatus = "Experimental: scanning"
         if self.LockMatch then self:LockMatch() end
+        self:EnforceGuardOff(true)
         self:Log("toggle", "Auto-play enabled (Auto Guard off)")
     else
         if self.ResetOffense then self:ResetOffense() end
@@ -258,6 +273,7 @@ function Extension:UpdateState(character, humanoid, root)
         local was = self.State
         if state=="Opponent" and (was=="Own" or was=="Shot" or was=="Loose") then
             self.TurnoverRetreat=true;self.TurnoverAt=now
+            if self.ObserveRisk then self:ObserveRisk(holder,"turnover") end
             self:ReleaseDribbleKeys(true)
             self:Log("turnover","confirmed holder "..tostring(holder and holder.Name).."; retreat to hoop")
         end
@@ -366,6 +382,7 @@ end
 function Extension:Tick(dt)
     if not self.Alive or not self.Settings then return end
     self.Clock = self.Clock + math.max(0, math.min(dt, 0.5))
+    if self.Settings.AutoPlay and self.Settings.AutoGuard then self:EnforceGuardOff(false) end
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     if self.ShotTrack and self.TrackShot then self:TrackShot() end
     self:CaptureTrace()
@@ -464,6 +481,7 @@ function Extension:StatusText()
             .." near rim "..tostring(self.ShotsNearRim or 0).." | dunks "..tostring(self.DunkAttempts or 0).."/"..tostring(self.DunksStarted or 0)
             .." | contests "..tostring(self.ContestCount or 0),
         "Dribble "..tostring(self.DribbleStatus or "-").." | shield "..tostring(self.ProtectFacing==true).." | setup "..tostring(self.PreparingShot==true),
+        "Policy "..tostring(self.AdaptiveRimOnly and "Adaptive rim-only" or "Space-first").." | "..tostring(self.AdaptiveReason or "no repeated failures") ,
         "Arc "..tostring(self.Settings.AimbotType).." delay "..tostring(self.Settings.ShotDelay).." | planning "..tostring(self.PlanCount or 0),
         "Last error: "..tostring(self.LastError or "none"),
     }
@@ -526,6 +544,8 @@ function Extension:Install(environment, settings)
             local ok=pcall(self.UpdateAutoFacing,self,dt or 1/60)
             if not ok and self.ReleaseAutoFacing then self:ReleaseAutoFacing() end
         end
+        if self.Alive and self.Settings.AutoPlay and not self.AutoMovePoint and self.Player
+            and heldBall(self.Player.Character) and self.ProtectiveIdle then self:ProtectiveIdle() end
         if self.Alive and self.Settings.AutoPlay and self.AutoMovePoint and not self:IsManual() then
             local character, humanoid, root = characterParts(self.Player)
             local action = humanoid and self.GameAction and self:GameAction(character)
@@ -685,7 +705,21 @@ function Extension:Destroy()
     if self.Run and self.RenderName then self.Run:UnbindFromRenderStep(self.RenderName) end
 end
 customizeClosure = function(name, original, environment, captures)
-    if name == "root.1083.232.12.644" then
+    if name=="root.1061" then
+        return function(value,...)
+            if Extension.Settings and Extension.Settings.AutoPlay then
+                local result=original(false,...)
+                if value and not Extension.GuardUISync then Extension:EnforceGuardOff(true) end
+                return result
+            end
+            return original(value,...)
+        end
+    elseif name=="root.1168" then
+        return function(...)
+            if Extension.Settings and Extension.Settings.AutoPlay then Extension:EnforceGuardOff(true);return end
+            return original(...)
+        end
+    elseif name == "root.1083.232.12.644" then
         return function(section, config, ...)
             if type(config)=="table" and config.Title=="Type" and type(config.Data)=="table" then
                 local low,high=false,false

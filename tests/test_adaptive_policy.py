@@ -1,0 +1,46 @@
+from pathlib import Path
+from lua_runtime import run
+folder=Path(__file__).resolve().parent;source=(folder.parent/'Ultimate.Blessed.decoded.lua').read_text();fixture=(folder/'sim_fixture.lua').read_text()
+lua=r'''_G.ULTIMATE_BLESSED_INSPECT=true;bit32={}
+local F=(function() FIXTURE end)();local app=assert(load(SOURCE,'adaptive','t',_G))();local e=app.Extensions;local v=F.v
+local s={AutoGuard=true,AutoGuardKeybind='L',Aimbot=true,AimbotType='High',ShotDelay=.28}
+e:Install(F.env,s);F.own.Character.ball=F.container(F.own.Character,true)
+local shown,notices;local notices={}
+local setter=app.CustomizeClosure('root.1061',function(value)s.AutoGuard=value end,F.env,{[0]=s})
+local caps={[0]=s,[1]={SetValue=function()end},[3]={SetValue=function(value)shown=value;setter(value)end},[2]={Notification=function()return{new=function(row)notices[#notices+1]=row end}end}}
+e.InputCaptures=caps;e:SetAutoPlay(true)
+assert(not s.AutoGuard and shown==false and notices[#notices].Title=='Auto Guard' and notices[#notices].Description:find('Disabled'),'start disables and notifies standalone guard')
+e:GuardKey({KeyCode='L'},false,caps);assert(not s.AutoGuard and shown==false and notices[#notices].Description:find('Disabled'),'L cannot reenable standalone guard')
+setter(true);assert(not s.AutoGuard and shown==false,'UI toggle cannot reenable guard')
+local mobile=app.CustomizeClosure('root.1168',function()error('native guard toggle ran')end,F.env,{})
+mobile();assert(not s.AutoGuard,'mobile toggle blocked too')
+s.AutoGuard=true;e:Tick(.01);assert(not s.AutoGuard,'external change corrected while autoplay on')
+e:SetAutoPlay(false);assert(s.AutoGuard,'previous standalone setting restored after autoplay')
+e:SetAutoPlay(true);e.MatchOpponent=F.enemy
+local root=F.root;root.Position=v(100,3,0);F.er.Position=v(80,3,0)
+e:ObserveRisk(F.enemy,'jumper_not_released');assert(not e.AdaptiveRimOnly,'one failure does not classify opponent')
+e:ObserveRisk(F.enemy,'jumper_not_released');assert(e.AdaptiveRimOnly and e:RiskProfile(F.enemy,false).Unreleased==2,'repeated failed jumpers adapt without cheat accusation')
+e.Clock=5;e.OffenseCharacter=F.own.Character;e.OffenseGoal=F.goal;e:OffenseStep(F.own.Character,F.oh,root)
+assert(e.DunkMode and not e:CanTakeShot(root),'rim-only strategy suppresses threes')
+F.enemy.Character.ball=F.container(F.enemy.Character,true);F.own.Character.ball:SetBall(false)
+e.State='Opponent';local target=e:DefenseStep(F.own.Character,F.oh,root,F.enemy)
+assert(e.DefenseMode=='Adaptive hoop protection' and target and (target-v(0,3,0)).Magnitude<20,'risk policy protects hoop instead of chasing perimeter')
+local other=F.player(v(200,3,0),'DifferentOpponent');e.MatchOpponent=other;e:SyncRisk();assert(not e.AdaptiveRimOnly,'adaptation is opponent-specific')
+F.own.Character.ball:SetBall(true);root.Position=v(64,3,0);e.OffenseGoal=F.goal;e.ForceShot=true
+e.OpponentReads={{Player=F.enemy,Position=v(65,3,0),Predicted=v(65,3,0),Velocity=v()}}
+assert(not e:CanTakeShot(root),'even timeout cannot force contested shot')
+e.OpponentReads={};assert(e:CanTakeShot(root),'clear shot remains available')
+e.State='Own';e.PreparingShot=false;e.Shooting=false;e.AutoMovePoint=nil;e.Clock=10;e.LastDribble=-100;e.MoveCooldowns={}
+e:ProtectiveIdle();assert(e.LastMove=='R' or e.LastMove=='V' or e.LastMove=='B','waiting still uses protective dribble moves')
+root.Position=v(8,3,0);e.DunkMode=true;e.OpponentReads={{Player=F.enemy,Position=v(4,3,0),Predicted=v(4,3,0),Velocity=v()}}
+assert(not e:PossessionPathClear(root,v(4,3,0),e.OpponentReads) and not e:TryDunk(root,F.goal),'dunks do not bypass body buffer')
+e.OpponentReads={};local original=F.world.Raycast;F.world.Raycast=function()return nil end
+e:ResetOffense();e.OffenseCharacter=F.own.Character;e.OffenseGoal=F.goal;e.ReadOpponents=function()return{}end
+local before=e.DunkAttempts or 0;e:OffenseStep(F.own.Character,F.oh,root)
+assert(not e.AutoMovePoint and (e.DunkAttempts or 0)==before,'no raw rim fallback or T input when floor support unavailable')
+local third=F.player(v(80,3,0),'ReleaseFailureOpponent');e.MatchOpponent=third;e:SyncRisk()
+for i=1,2 do e.ShotTrack={Kind='Shot',Released=false};e:FinishShotTrack('Not a release: ball taken by opponent') end
+assert(e.AdaptiveRimOnly,'actual shot-result handler feeds opponent adaptation')
+return 'PASS: guard lock across key/UI/mobile/external edits, off notice and restoration; opponent-specific adaptation, clear-space shots, hoop protection, protective waiting and safe dunk gating'
+'''
+print(run(lua.replace('FIXTURE',fixture).replace('SOURCE','[====['+source+']====]')).decode())

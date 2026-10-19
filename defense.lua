@@ -74,7 +74,10 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     local along = dflat(here-attackerFlat):Dot(direction)
     local mode, spacing
     if self.TurnoverRetreat and (along>3 or rimDistance<10) then self.TurnoverRetreat=nil end
-    if self.TurnoverRetreat and along<3 then
+    local risk=self:RiskProfile(attacker,false)
+    if risk and risk.RimOnly and rimDistance>18 then
+        mode="Adaptive hoop protection";spacing=math.max(4,rimDistance-9)
+    elseif self.TurnoverRetreat and along<3 then
         mode="Transition: protect hoop"
         spacing=math.max(4,rimDistance-10)
     elseif along < 0.5 then

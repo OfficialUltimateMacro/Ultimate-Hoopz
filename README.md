@@ -1,151 +1,41 @@
-Reactive routes and turnover defense update (2026-10-18)
+# Ultimate
 
-Read user b55116f5 log: repeated routing turnovers plus manual A/D pauses; no runtime errors. Defender coordinates were absent, so actual live contact cannot be reconstructed from this log. Added current/predicted nearest defender gaps and reroute/retreat state to existing bounded tactical traces.
-
-New ReactiveRoute checks movement waypoint clearance on the render path at a bounded0.05s cadence. Unsafe commitments and route hysteresis are cancelled; choose a new supported/court-bounded exit or stop when none exists. Existing defensive safety buffer still heuristic and cannot prevent an independently moving opponent from contacting us. Dribble decisions now use the nearer of current/predicted threat positions, avoiding a full move pool simply because predicted position looks distant.
-
-Loss handling: render stops an offensive waypoint immediately if ball is absent while State still Own. A confirmed court-scoped opposing holder bypasses the normal Own->Opponent debounce, cancels held dribble keys, and sets TurnoverRetreat. Defense targets a position near the hoop until basket-side control is recovered, instead of following close behind a stolen-ball handler; Recover also applies to beaten defenders at larger gaps. Manual input remains authoritative.
-
-Fixed native root.106 wrapper: under Auto-play, an off-ball defensive contest jump no longer starts an aim routine/AimDepth or puts defense into Shot. Own-ball and manual non-Auto-play shooting remain available.
-
-New test_reactive_turnover verifies changing blocker/alternate path, immediate stale offensive movement cancellation, confirmed turnover priority, near-hoop recovery target, defensive aim suppression and trace fields.17 offline packaged suites plus startup bind to current build. Performance budget intentionally allows up to250 MoveTo calls/10s during reactive pressure (previously150); observed ~208 in the fake shadow scenario, below frame-rate writes; player/goal caches and ray budgets remain checked. Fake CPU timing does not establish live lag.
-
----
-
-Default preferences update (2026-10-18): Ball Magnet remains off at startup; Ball Reach remains enabled with Reach Strength now2, previously10. Auto-play still applies its existing temporary feature toggles while enabled and restores them afterward. Other defaults unchanged.
-
-Defender-clearance and tempo update (2026-10-18)
-
-Read user's abf97cd9 log:6/6 releases and6 near-rim passes; routing turnovers remain. Concrete fix: AttackMode previously passed an empty opponent list to SteerTo after the route timeout, disabling avoidance. It now retains real opponent reads.
-
-PossessionPathClear rejects route segments crossing an8-stud conservative buffer (up to+2 with opponent speed), against both current and predicted positions. Starting inside that buffer permits only separation-increasing exits. This is an avatar-clearance heuristic, not knowledge of Hoopz's hidden steal hitbox and not a no-contact guarantee. Escape commitments are cancelled/replaced when unsafe. Fan steering includes backward angles, desired endpoint spacing14studs, floor/wall checks and locked-court boundary checks. Dunk mode and off-ball defense/recovery keep their original approach rules.
-
-Input floor0.075s (was0.10), repeat cooldown0.16s (was0.20), R cooldown0.32s (was0.40). Key hold remains0.04s and game Action/manual/shot ownership gates remain. Full move pool now allowed from12studs (was16); close pressure retains protective moves. Native game acceptance and real steal rate unverified.
-
-New test_spacing verifies swept-body rejection despite clear endpoint, detour, retreat, court bounds, timeout reads,0.08s input acceptance and expanded variety. Full suite includes16 packaged suites plus startup. The shadow simulation now bounds defender movement at14studs/s rather than teleporting each frame. Under sustained6stud shadow pressure, spacing may choose a bounded safety fallback instead of forcing a shot; cutter and second-nearest scenarios still require real shot progress. Old committed-exit test now allows cancellation/replacement when defender movement makes the exit unsafe. Near-contact hesitation is suppressed. Do not describe this change as always maintaining8studs when the defender can close independently.
-
----
-
-Aggressive possession shielding and diagnostics (2026-10-18)
-
-Latest user preference overrides prior open-lane restraint: randomized chains now continue during moving possession, including open lanes, at a0.10s decision floor. Nearby defenders restrict candidates to protective transfers/fakes; open lanes allow C/H/F/G/R/V/B. Avoid immediate duplicate moves; per-move cooldowns, active actions, manual control and shot/dunk ownership still apply. At contact an exposed-hand transfer gets priority, with wait as fallback when unavailable rather than an unsafe random crossover. This is not a promise of uninterrupted input or immunity to steals.
-
-Shield starts whenever the local character holds the ball, before a debounced Own transition or route exists; stationary possession shields too. Camera faces away from the nearest court-scoped opponent; absent a read it uses an away-from-rim fallback until shot setup/dunk. Native shift-lock remains required for camera-driven body turning (manual enable if automatic controller unavailable). Shot setup explicitly disables shielding. Camera turns remain eased, not instant physical root rotation.
-
-Shot settling reduced from0.12+0.12s to0.06+0.06s; pump fake bounded at0.25s instead of0.45; early sweet-spot adjustment limited to first0.5s. High arc and0.28 delay unchanged. The known1.25s retry interval is retained so retries cannot overwrite one-second release confirmation. No live accuracy improvement is established; native High power/arc tables remain unchanged.
-
-Copy Auto-play log now includes per-key move counts and latest60s of0.5s tactical samples (120 bounded rows): position, speed, goal distance, Power, shield/setup flags, route, dribble reason, shot block reason and state. Events carry run ID and sequence, attempt logs capture arc/power/delay/goal, and Off diagnostics reset state age/holder/shield flags. Events remain capped60. No network telemetry.
-
-New test_aggressive_autoplay verifies possession-first stationary shielding, protective fallback, rapid variety without immediate repeat, sub0.12s open-shot readiness and trace/session bounds. Updated older tests reflect the latest randomized-chain preference.15 offline suites plus startup pass, bound to exact build hash. Live gameplay still unverified; avoid promising no steals/perfect shots.
-
----
-
-High arc and possession-protection update (2026-10-18)
-
-High is now the startup AimbotType; Mixed arc and Low remain selectable. Shot Delay remains0.28. Dribbling no longer uses the random move fallback. ChooseDribble transfers an exposed hand away from a nearby defender, preserves an already protected hand, waits when a safe input is on cooldown, avoids open-lane input spam, and commits decisions for0.24s. R is reserved for closing pressure before contact. Shooting/Dunking actions always block dribble inputs.
-
-PlanEscape compares both exits against all nearby predicted defenders, steps sideways/backward at contact, and converts movement side into the character's actual RightVector before selecting F/G. Unknown or already protected hands do not trigger a guessed crossover.
-
-During close-pressure moving dribbles (within12studs), DesiredFacing points away from the defender so the back shields the ball. Camera yaw follows that direction through native shift-lock. Stopping to set a shot, entering dunk mode, losing pressure, manual input and disabling return normal control. Native automatic shift-lock was unavailable in the user's log; native shift-lock may need to be enabled manually for camera yaw to rotate the body. No forced root CFrame was reintroduced.
-
-New test_ball_protection covers safe hand transfers, cooldown restraint, protected-hand retention, open-lane restraint, action exclusion, facing away during dribbles and rim-facing recovery. Existing tests now validate reactive R rather than requiring stationary-defender/random move spam; camera tests check shielding plus return to hoop view. All results are offline mock behavior, not proof of a lower live steal rate. Keep user testing feedback focused on strips, facing and shot setup.
-
----
-
-Shot Delay default update (2026-10-18): default is now the existing slider minimum, 0.28 seconds (previously 0.32). Bounds and user adjustment remain unchanged. customizations.lua applies initializer root[6][1976]; startup preferences check verifies the default and displayed 0.28.
-
-Current update (2026-10-18): Mixed arc is the default, ordered Low / Mixed arc / High. It averages native aim offsets and Power values; shared Auto-play range is 58–73 studs. Native endpoint tests pass, but live accuracy is uncalibrated.
-
-New match.lua scopes holders, opponents and rebounds to a locked half court, retaining opponent and ball identity instead of selecting the first global holder. Opponent picker, Lock court here and Lock viewed hoop correct ambiguous adjacent courts. No verified game-specific court/team API exists; automatic nearest-hoop selection can require manual correction.
-
-Camera assistance uses capability-checked native PlayerModule mouse-lock and AutoRotate=true, with no root.CFrame assignment. It restores owned lock and previous AutoRotate on manual/shot/disable/unload. If unavailable, enable native shift-lock manually; logs explain the fallback. The simulation models engine shift-lock separately; live integration remains unverified.
-
-Dunk T holds 0.65s while continuing the approach until actual Shooting/Dunking action. No undocumented rim-hang control was added. Rebounds predict bounded landing points with court/floor checks. Logs include hoop coordinates, locked opponent, camera mode and movement distance.
-
-13 packaged offline suites plus simulated startup validate the generated build. New test_match_context.py and test_mixed_arc.py cover global-holder rejection, exact ball tracking, moving dunks, native arc/power interpolation and restoration. Legacy 1D unit tests isolate court context, covered separately in 3D. Simulated shots now release the same ball instead of spawning an unrelated replacement.
-
-Dribbles retain 0.10s minimum pacing and shots retain 1.25s retry spacing. A 0.9s retry overwrote the one-second release check before it finished; do not reintroduce that bug. Live Hoopz acceptance, accuracy and performance remain unverified.
-
-Source remains decoded register-source, not the original author's handwritten code. Rebuild includes match.lua; publisher requires passing tests bound to the exact build hash. Permanent loader remains main/Ultimate.lua; see github-publication.json for actual publication status.
-
----
-
-# Ultimate â€” decoded Blessed runtime
-
-This version is reconstructed from the supplied **Blessed** script, with **Ultimate** branding and the requested startup preferences. It uses Blessed's recovered UI and gameplay program, rather than the separate Ultimate 1.1 implementation.
+Hoopz Auto-play with Ultimate branding and editable recovered runtime source.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/OfficialUltimateMacro/Ultimate-Hoopz/main/Ultimate.lua"))()
 ```
 
-## Editable source
+## Current behavior
 
-`Ultimate.Blessed.decoded.lua` contains the decoded runtime: readable constants, prototype tables, named runtime helpers, and instruction handlers. Change `local BRAND = "Ultimate"` near the top to edit the title. There is no encrypted Luraph payload or original decoder bootstrap in this file.
+- J toggles Auto-play. While active, the separate Auto Guard feature is locked off across its keybind, UI and mobile toggle. A Disabled notification explains that Auto-play handles defense. The previous standalone setting restores when Auto-play stops.
+- Auto-play owns offense, possession transitions, hoop recovery, opponent-scoped defense and loose-ball recovery. Manual movement and camera intervention remain authoritative.
+- Normal jumpers require at least12studs of current/predicted defender clearance and no nearby airborne contest. Route timeouts cannot bypass shot-space checks.
+- Outcome adaptation is opponent-specific and rule-based: two failed jumper releases or three observed possession losses activate rim-only offense and deeper hoop protection for that opponent. This does not detect or establish cheating. Profiles are bounded12opponents in memory, without persistence or telemetry. The active policy and reason appear in diagnostics.
+- Rim approaches obey the same clearance checks as dribble routes. Dunk input requires a supported clear approach and sufficient separation. The planner holds and shields when no safe lane exists; it does not fall back to a raw target through a blocked route. An activated policy cannot guarantee a winning route.
+- Moving routes are revalidated at a bounded0.05s cadence. Invalid commitments are replaced or stopped; court boundaries, walls, floor support and predicted positions constrain exits. The buffer is a heuristic, not knowledge of the game's hidden hitboxes. Independent player movement or game animations can still cause contact.
+- Dribble chains use a0.075s input floor,0.16s ordinary repeat and0.32s R repeat cooldown. Actual game actions, shooting, manual input and key conflicts can delay inputs. Waiting with possession can use protective R/V/B fakes.
+- Assisted camera yaw is faster while shielding or defending; long rim drives retain shielding until the close approach. Shots and manual input release camera ownership. Body turning uses native shift-lock; enable it manually when automatic controller access is unavailable. The script does not force character root orientation.
+- Turnovers cancel stale offensive movement and prioritize hoop-side recovery. Defensive contest jumps do not invoke the aim routine while off-ball.
 
-**This is not the author's original handwritten source.** The program still uses register tables, instructions and program counters. Original variable names, comments and structured source were not recovered. It should not be described as a fully devirtualized source copy.
+## Startup preferences
 
-The recovered UI, supported-game branches and limits are retained, with the input and gameplay additions described below. Requested defaults are configured in `customizations.lua`:
+High arc; Shot Delay0.28; Aimbot on without its own keybind; standalone Auto Guard and Ball Check on; Auto Guard keyL; Auto-play off with keyJ; Ball Magnet off; Ball Reach on with strength2; WalkSpeed0.01; Anti Drop on. Auto-play temporarily applies its existing feature toggles while enabled and restores prior values afterward. Low and Mixed arc remain selectable. Mixed arc interpolates recovered endpoint offsets and power and is not live-calibrated.
 
-- **Auto Guard key L**, explicitly labeled Auto Guard key. Its handler and notification affect only Auto Guard.
-- Aimbot enabled with **no key binding or key picker**. Auto Guard and Ball Check enabled by default.
-- Match target jump enabled: subscribes only to the original guard/Ball Check selector's current player, and rechecks that selector before jumping. Target changes, lost possession, death, respawn, own possession and manual movement are handled.
-- **Auto-play** is experimental and stays off by default. **J** toggles it; Auto-play key is editable and the UI switch follows the shortcut. Keyboard toggles show a two-second Auto-play Enabled/Disabled notification. It retains defense and loose-ball pickup, and now moves with possession to open shooting positions. It samples a shooting arc at the recovered aim range, scores travel and defender spacing, and steers around nearby players and collidable obstacles. Floor probes reject unsupported steps; blocked routes stop and replan. This is local tactical routing, not a full-map pathfinding or match strategy system.
-- Shot dispatch now starts the original delayed aim routine independently of synthetic jump detection, matching the request-before-takeoff ordering of manual Space. It still requests a jump and suppresses duplicate native events, but an unconfirmed jump no longer silently skips shooting. The actual recovered VM press/release path is regression-tested with jump detection forced to fail. Existing server input acceptance and shot success remain unverified in live Hoopz.
-- **Shot status** in Guard controls shows the latest dispatch/error, current blocker and attempt count. Rim/backboard hits within five studs of the target and at basket height no longer falsely reject the straight diagnostic ray for an arced shot. Farther walls still block.
-- **Auto-play camera** (default on; see round 3 above for current camera ownership). Shift-lock style: while Auto-play holds the ball the body squares toward the attack (blend of drive direction and basket, fully toward the rim inside 16 studs, toward the run when retreating, forward during escapes); the camera sits behind at a constant 14–22-stud radius and ~21° pitch looking up the court, with yaw rate-limited (body 9 rad/s, camera 2.6 rad/s) so it never swings. It pulls in only for walls. It releases instantly on WASD/arrows, physical Space, right mouse or any mouse movement (1 s pause, then eases back from your view), during any original aim routine (manual or automatic), during Hoopz Shooting/Dunking actions, possession loss, scriptable cameras, disable and unload, restoring the original AutoRotate.
-- Route steering briefly retains a clear exit direction to reduce left/right oscillation while penalizing predicted close defender intercepts.
-- Opponent reads use nearby replicated positions, bounded velocity prediction, and airborne state. Defenders never veto a shot: in range with a basket line it shoots with zero space; contested shots fire without the settle pause; an airborne blocker within 7 studs gets one R pump fake and the release waits at most 0.45 s for them to land. Open early possessions take one step into the middle of the calibrated power table (60–72 studs low / 59–71 high). A 4.5 s possession clock stops spot-shopping and attacks the nearest ring point; after 8 s a repeatedly failing straight-line check no longer blocks the shot.
-- **Offensive movement**: an on-ball defender in the path triggers a committed 0.5 s lateral escape away from his side (or toward the ball hand when he is square), paired with the matching move: F/G behind-the-back from the off hand, C when already on that side, V/B fake when square. A fast-closing defender gets a 0.22 s hesitation with R first. At most 4 escapes per possession, 0.7 s apart, so it cannot circle forever. Shot spots are re-sampled around the side you are on and only replaced when clearly better. **Second nearest** now only picks spots where that basket is nearest, so the recovered aimbot targets it.
-- **Auto-dunk** (default on). Inside the jumper ring it drives to the near side of the rim and presses T. It also drives from the near edge of the ring (<64 studs) when pressed hard (<5 studs) and the corridor to the rim is empty. If neither the Hoopz Dunking action nor a release is seen, the next dunk tries 2 studs closer (min 4).
-- **Verification**: after each shot routine the script watches the Character Action attribute, whether the ball left your hand within 1 s, and the closest loose-ball pass to the rim for 2.5 s. Shot status shows shots sent / released / reached rim (≤3.5 studs) and dunks sent / started, plus the latest result text.
-- **Auto-dunk** (default on, Guard controls toggle). Inside the calibrated jumper ring (closer than ~55 studs to the rim) it drives to the rim instead of backing out to the three, and presses **T** within 9 studs (0.25 s hold, 1.2 s cooldown). Shot status counts Dunks. Whether Hoopz accepts the T dunk from that spot is not verified live.
-- **Auto-play dribble** (default on): H, F/G, V/B, R, C as mapped. Reactive picks plus a varied fallback (never the same move twice in a row); during committed escapes the planned move is used instead. Cadence 0.10 s between moves, 0.20 s same move, 0.40 s R, 0.04 s holds.
-- **Attack basket** chooses Nearest or Second nearest when acquiring possession. The selected basket is retained for that possession. Set the correct scoring side; the script does not know game-specific team/court assignments. The original shooting routine requires that intended basket to also be nearest at shot time.
-- Manual movement or typing pauses Auto-play and clears its offensive plan. Possession loss, respawn, disable and unload clear routes and release keys. Disabling restores the feature values Auto-play changed where they still match. Queued shots recheck state; an original shot routine already executing may finish after disable.
-- Ball Magnet **off by default**, strength **50**; Ball Reach enabled at **10**.
-- Hoopz WalkSpeed **0.01**, the recovered slider maximum; Anti Drop enabled.
-- Ultimate wordmark used for the header and floating icon.
-- **Player collisions** remains experimental and defaults OFF in the Guard controls. It attempts local torso contact by enabling CanCollide and using the Default collision group on your torso and nearby living players' torsos within 20 studs. It leaves roots, limbs, accessories, velocities, ownership and server collision rules alone. Settings restore when disabled, when players leave range, on death/respawn and on unload. Replication, constraints or server physics may prevent pushing; actual movement of another player is not guaranteed. This is a local contact experiment, not a verified push feature.
+## Source and build
 
-The PNG is hosted in `assets/ultimate-wordmark.png`. When `getcustomasset`/`getsynasset` and `writefile` are available, the script downloads and caches it as `Ultimate-wordmark-061784a8.png` in the executor workspace. Downloads must have a PNG signature. If custom assets are unavailable, a pink Ultimate text wordmark is shown. The original Blessed logo is not used as a fallback.
+Ultimate.lua and Ultimate.source.lua contain identical generated source. This is decoded register-source, not recovery of the original author's handwritten variable names, comments or structured source. The raw recovered program and instruction handlers remain in data/.
 
-The original optional spoofing controls remain. Readable additions are in `extensions.lua` and `offense.lua`. Rejoin before loading an updated version because the recovered script retains its original loaded-state guard.
+Editable modules: customizations.lua, extensions.lua, offense.lua, match.lua and defense.lua. Branding assets are in assets/. Rebuild from the package directory:
 
-## Auto-play round 3: defense, possession state, camera ownership
+```text
+python rebuild.py
+```
 
-Derived from the 23-00-29 live recording (half-court 1v1, one hoop, 24 s shot clock).
+The generator writes Ultimate.Blessed.decoded.lua. The release pipeline checks its manifest hash and binds passing test results to the exact published bytes, then updates main atomically and verifies the permanent loader URL.
 
-- **Possession** follows Blessed's own selector rule: a player holds the ball when `Character.Basketball` contains `Ball`. An empty container left after a turnover no longer counts once that layout has been seen; until then the old existence check is kept so working offense is not lost.
-- **State model** (debounced): Own, Opponent, Teammate, Loose, Shot (our shot/aim/dunk routine), Reset (teleport >25 studs, 0.6 s), Manual (with reason), Dead. Leaving Own for Loose waits 0.3 s (dribble reparenting); a confirmed opponent holder is acted on in about 0.12 s. Routes, plans, goals and pending inputs are cleared when their possession or character ends.
-- **Defense** (`defense.lua`): the defended hoop is the goal on the attacker's court (nearest to the attacker, sticky for the possession), not the hoop nearest to us. Modes: Contain (6 studs, outside), Close out (4 studs, attacker within 80 studs of the hoop), Protect rim (near the basket or driving), Recover (beaten: cut back basket-side around the attacker, or sprint to the rim late in a drive). Drive velocity is led fully, side-to-side velocity partly. It never drifts farther from the hoop than the attacker, keeps to supported floor, holds still when already in a good spot, faces the attacker, and jumps only for a real Shooting/Dunking action or a rising jump within 9 studs. Planning runs at 20 Hz when the attacker is within 18 studs, 10 Hz otherwise. Ball Check jump matching still works.
-- **Auto Guard**: turning Auto-play on switches Auto Guard off (Auto-play defends itself; one movement writer) and turning it off restores the value Auto Guard had before. While Auto-play runs, Blessed's guard loop does not move the character even if L is pressed.
-- **Camera**: orbits the same focus as the Roblox camera at your current zoom radius (8–40 studs), so handing back is seamless; first person is respected (body only). Wall checks start at the head and ignore the ball, hitboxes, transparent, unanchored or small parts. Offense frames the basket; defense frames the attacker from the basket side. Pitch eases into 16–34°. Mouse/right-click/WASD/Space hand control back at once; the camera pause never stops defensive movement.
-- **Reliability**: shot flag stuck >4 s, aim flag >5 s, a stale Hoopz Action >2.5 s and stalled movement (>2 s not approaching a target) recover with a log entry. One runtime error no longer disables Auto-play (5 errors in 10 s does).
-- **Shots/dunks**: planned → input sent → Action seen → release confirmed (out of hand 0.15 s, not regained, not taken by an opponent) → closest pass of that one bound ball to the rim. A make is reported as not verifiable.
-- **Diagnostics**: Shot status shows state and time in state, last transition, holder and jump target, basket and intent, why movement stopped, manual reason and remaining time, Action and busy flags, shot/dunk/contest counters and last error, plus the last 4 events. **Copy Auto-play log** copies the 60-entry event log (wall-clock + T+ seconds since Auto-play started) with `setclipboard` when available, including Humanoid died/ragdoll/physics state changes.
+## Validation and limitations
 
-## Performance (mocked, 10 simulated seconds)
+18packaged offline suites plus a simulated startup check validate this release. They cover UI/key isolation, outcome adaptation, shot-space refusal, safe dunk gating, route invalidation, turnovers, camera handback, input cleanup, court/holder scoping and bounded diagnostics. Simulation geometry and game services are simplified. They do not establish live scoring accuracy, steal resistance, real hitboxes, acceptance of moves or Roblox FPS. Safe waiting is reported separately from offensive success; a stalled possession is not a demonstrated win.
 
-`tests/test_performance.py` counts engine calls. Holding the ball with a shadowing defender, versus the previous build: raycasts 6976→1285, RaycastParams 764→10, GetPlayers 849→18, GetTagged 171→5, MoveTo 594→43, mock Lua CPU −47%. Seeking a loose ball: full workspace scans 10→1 (event-driven ball index), raycasts 1120→130, MoveTo 600→21. Part of the holding-ball reduction comes from changed behavior (committed escapes skip some steering), so it is not a pure like-for-like. Mock CPU time is relative only; real frame cost was not measured in Roblox.
-
-## Validation
-
-- Lua syntax loading passed.
-- All 164 recovered prototypes and their child links were checked.
-- Before gameplay additions, the reconstructed runtime and recovered original interpreter completed matching mocked startup traces. Current startup intentionally differs by removing the aim picker and adding the Auto-play controls.
-- The original safeword URL was retrieved and contained `digital` at the time of this build. Its check remains unchanged.
-- The extended mocked Hoopz route completed initialization, verified actual initialized settings and maximum slider values, and confirmed that only the guard keybind picker remains.
-- Native extension regression checks cover guard-only L/notification and processed/typing input; target identity, switching, possession, cooldown and respawn; settings-table replacement; Auto-play enable/restore, manual pause, loose-ball ownership, shot range/cooldown, death and cleanup.
-- Offense simulation covers possession movement and arrival at a calibrated shooting position, defender prediction/filtering and contest gates, wall/ledge steering, all seven mapped dribble keys, cooldown/release, manual input, guard-key conflicts, queued-shot cancellation, blocked routes and cleanup.
-- Collision regression checks cover default-off, nearby torso-only changes, range/death/respawn/disable/unload restoration, current server baselines and preserving externally changed values.
-- Native recovered-shot integration now runs the unmodified root.106 VM routine and verifies one actual mocked mouse press/release from the normal request path, including simultaneous executor/native input. Camera tests cover heading/position, mouse/manual/shot/possession/toggle release and original AutoRotate restoration. Stable-position settling is tested with stale velocity.
-- Jump regressions cover native input, state fallback, takeoff confirmation, no duplicate shot, blocked-jump timeout, cancellation, Space release and preserving manually held Space. J toggle/UI synchronization and typing/processed-input behavior are checked. Collision and Auto-play labels are shortened to fit the narrow UI.
-- Logo checks cover one shared download/cache for both icon locations, custom-asset failure fallback, and ordinary property assignments.
-
-Startup mocks do not run original scheduled gameplay tasks. Native offense tests separately execute simulated movement and deferred shot/input callbacks. These checks do not verify live rendering, server acceptance, complete map navigation, anti-cheat behavior or live Hoopz gameplay. No live Hoopz test was performed. Portable native tests and prerequisites are in `tests/README.md`.
-
-## Rebuilding
-
-`python rebuild.py` regenerates the decoded runtime from `data/Blessed.decoded-program.json`, `data/Blessed.instruction-handlers.json`, `customizations.lua`, `extensions.lua`, and `offense.lua`. The original decoded data stays unchanged. `branding-changes.json` records title/logo substitution locations. `reconstruction-manifest.json` records the file hash and publication status.
-
-The original supplied script and the earlier independently authored Ultimate implementation remain separate local artifacts. Git history preserves the previous public build.
+Copy Auto-play log exports local bounded events, move counts and tactical samples, including policy, defender gaps, reroutes, power and shot reasons. It does not send telemetry. Tests and engineering documentation use synthetic scenarios; private user media and personal gameplay logs are not included.
