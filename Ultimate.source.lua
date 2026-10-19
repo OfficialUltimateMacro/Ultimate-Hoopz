@@ -160,6 +160,7 @@ function Extension:CaptureTrace()
         tostring(self.ProtectFacing==true),tostring(self.PreparingShot==true),tostring(self.DribbleStatus).." spacing="..tostring(self.SpacingReason or "-"),
         tostring(self.AutoPlayStatus),tostring(self.ShotBlockReason))
     row=row..string.format(" gap=%.1f predictedGap=%.1f reroutes=%d retreat=%s",gap,predGap,self.RerouteCount or 0,tostring(self.TurnoverRetreat==true))
+    row=row.." strategy="..(self.AdaptiveRimOnly and "rim" or "normal").." refused="..tostring(self.MoveRefusal or "-")
     self.TraceLog=self.TraceLog or {};table.insert(self.TraceLog,row)
     if #self.TraceLog>120 then table.remove(self.TraceLog,1) end
 end
@@ -282,7 +283,8 @@ function Extension:SetAutoPlay(enabled)
         -- Auto-play defends on its own, so Blessed's Auto Guard is switched
         -- off (one movement writer) and restored when Auto-play stops.
         self.AutoPlaySnapshot, self.AutoPlayApplied = {}, {}
-        for name, value in pairs({Aimbot=true, AutoGuard=false, BallMagnet=true, BallReach=true}) do
+        -- Ball Magnet is never enabled automatically; only the user turns it on.
+        for name, value in pairs({Aimbot=true, AutoGuard=false, BallReach=true}) do
             self.AutoPlaySnapshot[name] = self.Settings[name]
             self.AutoPlayApplied[name] = value
             self:SetFeature(name, value)
@@ -393,6 +395,7 @@ function Extension:UpdateState(character, humanoid, root)
 end
 function Extension:AutoPlayStep(character, humanoid, root)
     local state, holder = self:UpdateState(character, humanoid, root)
+    if self.UpdateRimStrategy then self:UpdateRimStrategy() end
     if state == "Manual" then
         if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
         self:StopAutoMove(); self.StopReason = "manual input ("..tostring(self.ManualReason)..")"
@@ -494,6 +497,12 @@ function Extension:Tick(dt)
     end
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     if self.ShotTrack and self.TrackShot then self:TrackShot() end
+    if self.Settings.AutoPlay and self.SamplePickups then
+        local ok,message=pcall(self.SamplePickups,self)
+        if not ok and self.Clock>=(self.NextSampleError or -100) then
+            self.NextSampleError=self.Clock+5;self:Log("error","pickup sampler: "..tostring(message))
+        end
+    end
     self:CaptureTrace()
     self.TickAccumulator = (self.TickAccumulator or 0) + dt
     -- Faster decisions when an attacker is close; 10 Hz otherwise.
@@ -590,7 +599,11 @@ function Extension:StatusText()
             .." near rim "..tostring(self.ShotsNearRim or 0).." | dunks "..tostring(self.DunkAttempts or 0).."/"..tostring(self.DunksStarted or 0)
             .." | contests "..tostring(self.ContestCount or 0),
         "Dribble "..tostring(self.DribbleStatus or "-").." | shield "..tostring(self.ProtectFacing==true).." | setup "..tostring(self.PreparingShot==true),
-        "Policy "..tostring(self.AdaptiveRimOnly and "Adaptive rim-only" or "Space-first").." | "..tostring(self.AdaptiveReason or "no repeated failures") ,
+        "Refused: move "..tostring(self.MoveRefusal or "-").." | route "..tostring(self.SpacingReason or "-"),
+        "Defense "..tostring(self.DefenseMode or "-").." vs "..name(self.State=="Opponent" and self.Holder or nil).." | "..tostring(self.DefenseIntent or "-"),
+        "Strategy "..tostring(self.AdaptiveRimOnly and "CONDITIONAL rim strategy" or "normal").." ("..tostring(self.Settings.AutoPlayMagnetResponse or "Manual confirm")
+            ..(self.Settings.AutoPlayRimOverride and ", override" or "")..") | "..tostring(self.AdaptiveReason or "-"),
+        "Evidence "..(self.EvidenceSummary and (self:EvidenceSummary()) or "-").." | last "..tostring(self.PickupEvidence and self.PickupEvidence.LastDecision or "-"),
         "Arc "..tostring(self.Settings.AimbotType).." delay "..tostring(self.Settings.ShotDelay).." | planning "..tostring(self.PlanCount or 0),
         "Last error: "..tostring(self.LastError or "none"),
     }
@@ -612,6 +625,9 @@ function Extension:Install(environment, settings)
         settings.AutoPlayKeybind = environment.Enum.KeyCode.J
         settings.AutoPlayCamera = true
         settings.AutoPlayDunk = true
+        settings.AutoPlayMagnetResponse = settings.AutoPlayMagnetResponse or "Manual confirm"
+        settings.AutoPlayRimOverride = false
+        settings.BallMagnet = UltimatePreferences.BallMagnet
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -629,6 +645,9 @@ function Extension:Install(environment, settings)
     settings.AutoPlayKeybind = environment.Enum.KeyCode.J
     settings.AutoPlayCamera = true
     settings.AutoPlayDunk = true
+    settings.AutoPlayMagnetResponse = "Manual confirm"
+    settings.AutoPlayRimOverride = false
+    settings.BallMagnet = UltimatePreferences.BallMagnet
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -724,6 +743,20 @@ function Extension:InstallControls(section)
         if type(copy)=="function" then pcall(copy,text) end
         self.LastLogCopy=text
     end})
+    -- Conditional strategy against suspected abnormal pickups. Manual confirm
+    -- (default) only prompts; Auto acts after strong repeated evidence;
+    -- Override forces the rim strategy for testing without evidence.
+    section:NewDropdown({Title="Magnet response",Data={"Manual confirm","Off","Auto (experimental)"},Default="Manual confirm",Callback=function(value)
+        self.Settings.AutoPlayMagnetResponse=value
+        self.RimAutoActive=false
+        self:Log("strategy","response mode "..tostring(value))
+    end})
+    section:NewButton({Title="Confirm suspected opponent",Callback=function() self:ConfirmSuspectedOpponent() end})
+    self.RimOverrideToggle=section:NewToggle({Title="Rim strategy override",Default=false,Callback=function(value)
+        self.Settings.AutoPlayRimOverride=value==true
+        self:Log("strategy","override "..(value and "on" or "off"))
+    end})
+    section:NewButton({Title="Clear rim strategy",Callback=function() self:ClearRimStrategy() end})
     section:NewDropdown({Title = "Attack basket", Data = {"Nearest", "Second nearest"}, Default = "Nearest", Callback = function(value)
         self.Settings.AutoPlayBasket = value
         if self.ResetOffense then self:ResetOffense() end
@@ -1054,6 +1087,8 @@ function Extension:ResetOffense()
     self.PreparingShot=false
     self.FakeShotStart, self.ForceShot, self.AttackMode = nil, nil, nil
     self.FreezeSince, self.FreezeLogged = nil, nil
+    self.BlockedSince, self.RimBlockedSince, self.RimFallbackLogged = nil, nil, nil
+    self.EscapeFlips, self.SideLockUntil, self.LastEscapeSide = nil, nil, nil
 end
 function Extension:ReleaseJumpKey()
     if not self.Environment then return end
@@ -1105,13 +1140,16 @@ function Extension:RequestAutoJump(humanoid, root, valid)
     return false
 end
 function Extension:PulseKey(name, hold, cooldown, force)
-    if self:IsManual() or self.Shooting then return false end
-    if not force and (not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.075) then return false end
+    local function refuse(reason) self.MoveRefusal=name..": "..reason;return false end
+    if self:IsManual() then return refuse("manual input owns controls") end
+    if self.Shooting then return refuse("shot in progress") end
+    if not force and not self.Settings.AutoPlayDribble then return refuse("dribble disabled") end
+    if not force and self.Clock-(self.LastDribble or -100) < 0.075 then return refuse("input floor 0.075s") end
     local key = self.Environment.Enum.KeyCode[name]
     self.MoveCooldowns = self.MoveCooldowns or {}
-    if self.Clock-(self.MoveCooldowns[name] or -100) < cooldown then return false end
-    if key == self.Settings.AutoGuardKeybind or key == self.Settings.AutoPlayKeybind then return false end
-    if self.Input:IsKeyDown(key) then return false end
+    if self.Clock-(self.MoveCooldowns[name] or -100) < cooldown then return refuse("move cooldown") end
+    if key == self.Settings.AutoGuardKeybind or key == self.Settings.AutoPlayKeybind then return refuse("key reserved") end
+    if self.Input:IsKeyDown(key) then return refuse("key physically held") end
     if not self.VirtualInput then
         local ok, service = pcall(self.Environment.game.GetService,self.Environment.game,"VirtualInputManager")
         if not ok or not service then self.DribbleStatus="Input unavailable";return false end
@@ -1136,7 +1174,7 @@ end
 function Extension:PulseDribble(name)
     -- Wait (bounded 0.6 s) while Hoopz reports an action from a previous move.
     local action = gameAction(self.Player and self.Player.Character)
-    if action=="Shooting" or action=="Dunking" then return false end
+    if action=="Shooting" or action=="Dunking" then self.MoveRefusal=name..": game "..action;return false end
     if action ~= nil and action ~= "" then
         if self.ActionSeenValue ~= action then
             self.ActionSeenValue, self.ActionSeenSince = action, self.Clock
@@ -1146,7 +1184,7 @@ function Extension:PulseDribble(name)
                 if self.Log then self:Log("action", "Hoopz Action value seen: "..tostring(action)) end
             end
         end
-        if self.Clock-(self.ActionSeenSince or self.Clock) < 0.6 then return false end
+        if self.Clock-(self.ActionSeenSince or self.Clock) < 0.6 then self.MoveRefusal=name..": previous move animating ("..tostring(action)..")";return false end
     else self.ActionSeenValue = nil end
     return self:PulseKey(name, 0.04, name == "R" and 0.32 or 0.16)
 end
@@ -1255,10 +1293,10 @@ function Extension:ResetRisk()
     self.RiskProfiles={};self.AdaptiveRimOnly=false;self.AdaptiveReason=nil
 end
 function Extension:SyncRisk()
-    -- Outcome counters are diagnostics only. Never force an offensive strategy.
-    self.AdaptiveRimOnly=false
+    -- Outcome counters (turnovers, failed releases) are diagnostics only and
+    -- never feed the conditional strategy, which UpdateRimStrategy owns.
     local profile=self:RiskProfile(self.MatchOpponent,false)
-    self.AdaptiveReason=profile and string.format("Outcomes only: losses=%d failed jumpers=%d",profile.Turnovers,profile.Unreleased) or nil
+    self.OutcomeSummary=profile and string.format("Outcomes only: losses=%d failed jumpers=%d",profile.Turnovers,profile.Unreleased) or nil
 end
 function Extension:ObserveRisk(player,kind)
     local profile=self:RiskProfile(player,true);if not profile then return end
@@ -1274,9 +1312,9 @@ function Extension:CanTakeShot(root)
     if not goal or not goal.Parent then self.ShotBlockReason="No attack basket selected";return false end
     if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
     if not self:InShotRange(root) then self.ShotBlockReason="Outside shooting range";return false end
-    local space,jumping=self:SpaceAt(root.Position,self.OpponentReads or {})
-    self.ShotContested=space<12 or jumping
-    if self.ShotContested then self.ShotBlockReason=(jumping and space>=12) and "Waiting for jump contest to clear" or "Waiting for 12 studs of shot space";return false end
+    -- Defender spacing never vetoes an in-range jumper (user preference:
+    -- shoot through contests). OffenseStep adds only a bounded pump fake
+    -- against a defender already airborne in front.
     if not self:ShotLaneClear(root,goal,self:MakeRayParams()) then
         -- After 8 s, a straight-line miss that ends near the hoop (rim/net
         -- structure) no longer blocks; a real wall in between still does.
@@ -1722,12 +1760,21 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local square = math.abs(defenderSide) < 1.2
     local preferred
     if square then
-        preferred = -(self.LastEscapeSide or 1)
+        -- Square defender: keep the previous side (or the ball-hand side)
+        -- instead of alternating, which produced left/right oscillation.
+        preferred = self.LastEscapeSide or (hand ~= 0 and (hand > 0 and 1 or -1)) or 1
     else preferred = defenderSide > 0 and -1 or 1 end
+    -- Flip guard: three side changes inside 3 s lock the current side 1.2 s.
+    local flips = self.EscapeFlips or {}
+    while flips[1] and now-flips[1] > 3 do table.remove(flips, 1) end
+    self.EscapeFlips = flips
+    if self.SideLockUntil and now < self.SideLockUntil and self.LastEscapeSide then preferred = self.LastEscapeSide end
     local closingSpeed = -flat(defender.Position-root.Position):Dot(defender.Velocity)/math.max(gap,0.01)
     -- Do not repeat a side that just failed to create space.
     local failed = self.EscapeFailed or {}
-    if failed[preferred] and now-failed[preferred] < 2 then preferred = -preferred end
+    if failed[preferred] and now-failed[preferred] < 2 and not (self.SideLockUntil and now < self.SideLockUntil) then preferred = -preferred end
+    local clearanceNow=30
+    for _,opponent in ipairs(opponents)do clearanceNow=math.min(clearanceNow,flat(opponent.Predicted-root.Position).Magnitude) end
     local chosen,bestScore=nil,-math.huge
     for _,exit in ipairs({{preferred,7,-3},{-preferred,7,-3},{preferred,4,-7},{-preferred,4,-7},{preferred,9,1},{-preferred,9,1}})do
         local side=exit[1]
@@ -1735,18 +1782,28 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         -- through the handler's hands. Score both exits against every defender.
         local point=root.Position+lateral*side*exit[2]+forward*(gap<8 and exit[3] or math.max(0,exit[3]))
         if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
-            local clearance=30
+            -- Score the whole exit: end and midpoint clearance against current
+            -- and predicted defender positions, plus separation gained.
+            local clearance,middle=30,30
+            local mid=(root.Position+point)/2
             for _,opponent in ipairs(opponents)do
-                clearance=math.min(clearance,flat(opponent.Predicted-point).Magnitude)
+                clearance=math.min(clearance,flat(opponent.Predicted-point).Magnitude,flat(opponent.Position-point).Magnitude)
+                middle=math.min(middle,flat(opponent.Predicted-mid).Magnitude,flat(opponent.Position-mid).Magnitude)
             end
             local bodySide=(point-root.Position):Dot(root.CFrame.RightVector)>=0 and 1 or -1
             local protected=hand*bodySide>0 and 0.7 or 0
-            local score=clearance+protected+(side==preferred and 0.4 or 0)
+            local sticky=(side==preferred and 0.4 or 0)+((self.SideLockUntil and now<self.SideLockUntil and side==self.LastEscapeSide) and 3 or 0)
+            local score=math.min(clearance,middle+2)+0.3*(clearance-clearanceNow)+protected+sticky
             if score>bestScore then chosen,bestScore={Side=side,BodySide=bodySide,Point=point},score end
         end
     end
-    if not chosen then return nil end
+    if not chosen then self.SpacingReason="no escape exit clear of defenders";return nil end
     self.EscapeCount = (self.EscapeCount or 0)+1
+    if self.LastEscapeSide and chosen.Side ~= self.LastEscapeSide then
+        flips[#flips+1]=now
+        if #flips>=3 then self.SideLockUntil=now+1.2;self:Log("dribble","escape side flipping: locked "..(self.LastEscapeSide>0 and "right" or "left").." 1.2s") end
+        if self.SideLockUntil and now<self.SideLockUntil then chosen.Side=self.LastEscapeSide end
+    end
     self.LastEscapeSide = chosen.Side
     if closingSpeed > 8 and gap >= 9 and gap < 10 and self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4 then
         -- Hesitation: plant briefly with a fake-out, then escape away from
@@ -1760,6 +1817,45 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local move=self:EscapeMove(chosen.BodySide,hand,square and gap>7)
     if move then self:PulseDribble(move) end
     return self.Plan
+end
+
+-- Bounded fallback after 1.5 s without any safe route: move up to 10 studs
+-- directly away from the nearest current/predicted defender, within the
+-- court and on supported floor. At most once per 1.2 s.
+function Extension:SpaceReset(root, opponents)
+    local now=self.Clock
+    self.BlockedSince=self.BlockedSince or now
+    if now-self.BlockedSince<1.5 or now<(self.NextSpaceReset or -100) then return nil end
+    self.NextSpaceReset=now+1.2
+    local nearest,gap=nil,math.huge
+    for _,opponent in ipairs(opponents)do
+        local d=math.min(flat(opponent.Position-root.Position).Magnitude,flat(opponent.Predicted-root.Position).Magnitude)
+        if d<gap then nearest,gap=opponent,d end
+    end
+    if not nearest then return nil end
+    -- Combined repulsion from every nearby defender (current and predicted),
+    -- so leaving one defender never walks into another.
+    local push=self.Environment.Vector3.new()
+    for _,opponent in ipairs(opponents)do
+        for _,position in ipairs({opponent.Position,opponent.Predicted})do
+            local offset=flat(root.Position-position);local d=offset.Magnitude
+            if d<14 and d>0.01 then push=push+offset/(d*d) end
+        end
+    end
+    local away=push.Magnitude>0.001 and unit(push) or unit(flat(root.Position-nearest.Predicted))
+    local params=self:MakeRayParams()
+    for _,degrees in ipairs({0,35,-35,70,-70,105,-105})do
+        for _,length in ipairs({10,6})do
+            local point=root.Position+rotate(away,math.rad(degrees))*length
+            if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
+                self:Log("dribble",string.format("space reset after %.1fs blocked: %d deg, %d studs",now-self.BlockedSince,degrees,length))
+                self.BlockedSince=nil
+                return point
+            end
+        end
+    end
+    self:Log("dribble","space reset refused: "..tostring(self.SpacingReason))
+    return nil
 end
 
 ---------------------------------------------------------------------------
@@ -1822,6 +1918,7 @@ function Extension:OffenseStep(character, humanoid, root)
     local minimum = self.Settings.AimbotType == "High" and 57 or 58
     local params = self:MakeRayParams()
     self.ForceShot = held >= 8
+    local rimStrategy = self.AdaptiveRimOnly == true and self.Settings.AutoPlayDunk ~= false
     -- Rim attack: inside the jumper ring the calibrated shot cannot score, so
     -- drive and dunk instead of backing out. Also drive from the near edge of
     -- the ring when pressed hard and the corridor to the rim is empty.
@@ -1835,6 +1932,16 @@ function Extension:OffenseStep(character, humanoid, root)
                     and flat(opponent.Position-goal.Position).Magnitude < rimDistance then corridor = false end
             end
             if corridor then self.DunkMode, self.DriveUntil = true, now+3 end
+        end
+        -- Conditional rim strategy: prefer safe drives/dunks over jumpers.
+        -- A blocked lane for 2.5 s still allows a normal, space-checked jumper.
+        if rimStrategy then
+            local fallback = self.RimBlockedSince and now-self.RimBlockedSince > 2.5 and self:CanTakeShot(root)
+            self.DunkMode = not fallback
+            if fallback and not self.RimFallbackLogged then
+                self.RimFallbackLogged = true
+                self:Log("strategy", "rim lane blocked 2.5s: open space-checked jumper allowed")
+            end
         end
     else self.DunkMode=false end
     if self.DunkMode then
@@ -1850,9 +1957,15 @@ function Extension:OffenseStep(character, humanoid, root)
         end
         if plan and plan.Kind=="hesitate" then self:StopAutoMove();self.AutoPlayStatus="Hesitation at the rim"
         elseif point then
-            self.AutoMovePoint=point;self.AutoPlayStatus=plan and "Rim drive: lateral escape" or "Driving to the rim"
+            self.RimBlockedSince,self.RimFallbackLogged=nil,nil
+            self.AutoMovePoint=point;self.AutoPlayStatus=(rimStrategy and "Rim strategy: " or "")..(plan and "Rim drive: lateral escape" or "Driving to the rim")
             if not plan then self:ChooseDribble(root,point,opponents,heldBall(character)) end
-        else self:StopAutoMove();self.AutoPlayStatus="No safe rim lane: hold and shield" end
+        else
+            self.RimBlockedSince=self.RimBlockedSince or now
+            local reset=self:SpaceReset(root,opponents)
+            if reset then self.AutoMovePoint=reset;self.AutoPlayStatus="Space reset: no safe rim lane"
+            else self:StopAutoMove();self.AutoPlayStatus="No safe rim lane: hold and shield" end
+        end
         return false
     end
     local canShoot = self:CanTakeShot(root)
@@ -1920,6 +2033,11 @@ function Extension:OffenseStep(character, humanoid, root)
         self:StopAutoMove();self.AutoPlayStatus="Hesitation: reading the defender";return false
     end
     local point = plan and plan.Point or self:SteerTo(root,self.ShotSpot,opponents)
+    if point then self.BlockedSince=nil end
+    if not point then
+        point=self:SpaceReset(root,opponents)
+        if point then self.AutoMovePoint=point;self.AutoPlayStatus="Space reset: route blocked";return false end
+    end
     if point then
         self.AutoMovePoint=point
         if plan then self.AutoPlayStatus=(plan.Side>0 and "Escape right" or "Escape left")
@@ -2169,6 +2287,271 @@ function Extension:RecoveryStep(character,humanoid,root)
     self.StopReason=target and nil or "at recovery point"
 end
 
+-- Suspected abnormal pickups (possible ball-magnet/remote-touch use).
+-- Client observations only: replication delay, hidden server hitboxes and
+-- dropped frames mean this can never prove cheating. Results are called
+-- "suspected" and never "confirmed". Only possession that appears in the
+-- locked opponent's hands while the last fresh sample showed the ball well
+-- beyond a generous reach allowance is counted. A magnet that physically
+-- drags the ball close before pickup looks like a normal pickup and is not.
+local PICKUP = {
+    BaseReach = 9, MinDistance = 14, Latency = 0.25, Margin = 2,
+    StaleAge = 0.25, Tau = 120, Window = 300, History = 1.2, MaxSamples = 90,
+    MaxEvents = 8, Spacing = 5,
+}
+Extension.PickupConfig = PICKUP
+local function pkey(player) return player and tostring(player.UserId or player.Name) or nil end
+local function pflat(v) return Extension.Environment.Vector3.new(v.X, 0, v.Z) end
+function Extension:ResetPickupEvidence(reason)
+    self.PickupEvidence = {Key=nil, Name=nil, Goal=self.MatchGoal, Events={}, Normal=0, Rejected={}, Possession=0}
+    self.PickupHistory, self.PickupMarks = {}, {Teleport={}, Respawn={}}
+    self.RimConfirmedKey, self.RimPromptCount, self.RimAutoActive = nil, nil, false
+    if reason and self.Log then self:Log("evidence", "reset: "..reason) end
+end
+-- One ball must be on the locked court: held by a court player or loose.
+function Extension:CourtBallSample()
+    local goal = self.MatchGoal
+    if not goal or not goal.Parent then return nil, "no locked court" end
+    local found, count = nil, 0
+    local players = {}
+    for _, player in ipairs(self:PlayerList()) do
+        local character, _, root = characterParts(player)
+        if character and self:MatchPlayer(player) then
+            players[player] = {Position=root.Position, Velocity=root.AssemblyLinearVelocity, Character=character}
+            local held = heldBall(character)
+            if held then
+                local part = ballPart(held)
+                count = count+1
+                found = {Position=(part and part.Position) or root.Position, Holder=player}
+            end
+        end
+    end
+    for part in pairs(self:BallSet()) do
+        if part.Parent and not self:BallOwner(part) and self:MatchPosition(part.Position) then
+            count = count+1
+            found = {Position=part.Position, Velocity=part.AssemblyLinearVelocity}
+        end
+    end
+    if count == 0 then return nil, "no ball on court" end
+    if count > 1 then return nil, "multiple balls on court" end
+    found.Players = players
+    return found
+end
+local function recent(mark, now, window) return mark ~= nil and now-mark <= window end
+-- Per-frame sampler (cheap: a few positions). Called only while Auto-play runs.
+function Extension:SamplePickups()
+    if not self.PickupEvidence then self:ResetPickupEvidence() end
+    local ev, marks, now = self.PickupEvidence, self.PickupMarks, self.Clock
+    if ev.Goal ~= self.MatchGoal then
+        local had = ev.Goal ~= nil
+        self:ResetPickupEvidence(had and "court changed" or nil)
+        ev, marks = self.PickupEvidence, self.PickupMarks
+        marks.MatchChanged = now
+    end
+    local inGame
+    pcall(function() inGame = self.Player:GetAttribute("Ingame") end)
+    if inGame ~= marks.InGame then
+        if marks.InGameSeen then marks.InGameChanged = now end
+        marks.InGame, marks.InGameSeen = inGame, true
+    end
+    local history = self.PickupHistory
+    local sample, why = self:CourtBallSample()
+    if not sample then
+        local last = history[#history]
+        if why == "multiple balls on court" then marks.Ambiguous = now
+        elseif why == "no ball on court" and last then marks.OutOfCourt = now end
+        return
+    end
+    sample.T = now
+    local previous = history[#history]
+    if previous then
+        local dt = now-previous.T
+        if dt > 0 and dt < 0.5 then
+            local jump = (sample.Position-previous.Position).Magnitude
+            if sample.Holder == previous.Holder and jump > 20 then marks.BallTeleport = now end
+            if not sample.Velocity then sample.Velocity = (sample.Position-previous.Position)/dt end
+            for player, info in pairs(sample.Players) do
+                local before = previous.Players[player]
+                if before then
+                    if before.Character ~= info.Character then marks.Respawn[pkey(player)] = now
+                    elseif (info.Position-before.Position).Magnitude > 25 then marks.Teleport[pkey(player)] = now end
+                end
+            end
+        end
+        -- Made basket: the ball drops through the hoop (handover follows).
+        local goal = self.MatchGoal.Position
+        if pflat(sample.Position-goal).Magnitude < 2.5 and previous.Position.Y >= goal.Y and sample.Position.Y < goal.Y-0.5 then
+            marks.Made = now
+        end
+        if sample.Holder ~= previous.Holder and sample.Holder and sample.Holder ~= ev.LastHolder then
+            ev.Possession = ev.Possession+1
+        end
+    end
+    sample.Velocity = sample.Velocity or self.Environment.Vector3.new()
+    if sample.Holder then ev.LastHolder = sample.Holder end
+    if previous and sample.Holder and previous.Holder ~= sample.Holder then self:EvaluatePickup(previous, sample) end
+    history[#history+1] = sample
+    while #history > PICKUP.MaxSamples or (history[1] and now-history[1].T > PICKUP.History) do table.remove(history, 1) end
+end
+function Extension:RejectPickup(name, reason)
+    local ev = self.PickupEvidence
+    ev.Rejected[reason] = (ev.Rejected[reason] or 0)+1
+    ev.LastDecision = "rejected ("..reason..")"
+    if self.Log then self:Log("evidence", tostring(name).." pickup rejected: "..reason) end
+end
+-- Evaluate one possession change into a court player's hands.
+function Extension:EvaluatePickup(previous, current)
+    local holder, now, ev, marks = current.Holder, self.Clock, self.PickupEvidence, self.PickupMarks
+    if holder == self.Player then return end
+    local teammate = self.Player.Team ~= nil and holder.Team == self.Player.Team and self.Player.Neutral == false and holder.Neutral == false
+    if teammate then return end
+    -- Continuation of the same possession (dribble reparent flicker).
+    for k = #self.PickupHistory, 1, -1 do
+        local s = self.PickupHistory[k]
+        if now-s.T > 0.6 then break end
+        if s.Holder == holder then return end
+    end
+    local key, name = pkey(holder), holder.Name
+    if self.MatchOpponent and self.MatchOpponent ~= holder then return self:RejectPickup(name, "not the locked opponent") end
+    if ev.Key and ev.Key ~= key then
+        self:ResetPickupEvidence("opponent changed")
+        ev, marks = self.PickupEvidence, self.PickupMarks
+    end
+    ev.Key, ev.Name = key, name
+    local age = current.T-previous.T
+    if previous.Holder and previous.Holder ~= self.Player then return self:RejectPickup(name, "direct transfer between other players (pass)") end
+    if age > PICKUP.StaleAge then return self:RejectPickup(name, string.format("stale sample %.2fs", age)) end
+    local before = previous.Players[holder]
+    if not before then return self:RejectPickup(name, "no prior opponent sample") end
+    if recent(marks.Respawn[key], now, 1.5) then return self:RejectPickup(name, "opponent respawned") end
+    if recent(marks.Teleport[key], now, 1.5) then return self:RejectPickup(name, "opponent teleported (reset)") end
+    if (self.ResetUntil and now < self.ResetUntil+1) or recent(marks.Respawn[pkey(self.Player)], now, 1.5)
+        or recent(marks.Teleport[pkey(self.Player)], now, 1.5) then return self:RejectPickup(name, "local reset/respawn") end
+    if recent(marks.BallTeleport, now, 1) then return self:RejectPickup(name, "ball teleported (inbound/reset)") end
+    if recent(marks.Made, now, 3) then return self:RejectPickup(name, "made-basket handover") end
+    if recent(marks.OutOfCourt, now, 2) then return self:RejectPickup(name, "ball left court (dead ball)") end
+    if recent(marks.Ambiguous, now, 1) then return self:RejectPickup(name, "ambiguous ownership (multiple balls)") end
+    if recent(marks.InGameChanged, now, 2) or recent(marks.MatchChanged, now, 2) then return self:RejectPickup(name, "match state changed") end
+    local offset = previous.Position-before.Position
+    local reach = pflat(offset).Magnitude+math.max(0, math.abs(offset.Y)-6)
+    local speed = previous.Velocity.Magnitude+before.Velocity.Magnitude
+    local threshold = math.max(PICKUP.MinDistance, PICKUP.BaseReach+speed*(age+PICKUP.Latency)+PICKUP.Margin)
+    local kind = previous.Holder == self.Player and "steal" or "loose ball"
+    if reach <= threshold then
+        ev.Normal = ev.Normal+1
+        ev.LastDecision = string.format("normal %s %.1f <= %.1f studs", kind, reach, threshold)
+        if self.Log then self:Log("evidence", name.." "..ev.LastDecision) end
+        return
+    end
+    local last = ev.Events[#ev.Events]
+    if last and last.Possession == ev.Possession then return self:RejectPickup(name, "already counted this possession") end
+    if last and now-last.T < PICKUP.Spacing then return self:RejectPickup(name, "too soon after previous event") end
+    ev.Events[#ev.Events+1] = {T=now, Distance=reach, Threshold=threshold, Excess=reach-threshold, Possession=ev.Possession, Kind=kind}
+    while #ev.Events > PICKUP.MaxEvents do table.remove(ev.Events, 1) end
+    ev.LastDecision = string.format("accepted %s %.1f studs (allowance %.1f)", kind, reach, threshold)
+    if self.Log then self:Log("evidence", name.." "..ev.LastDecision) end
+end
+-- Decayed evidence for the current opponent. Levels: none / suspected /
+-- strong. "Strong" is still a client-side suspicion, never a confirmation.
+function Extension:PickupLevel()
+    local ev, now = self.PickupEvidence, self.Clock
+    if not ev then return "none", 0, 0, 0, nil end
+    local score, excess, kept = 0, {}, {}
+    for _, e in ipairs(ev.Events) do
+        if now-e.T <= PICKUP.Window then
+            kept[#kept+1] = e
+            score = score+math.exp(-(now-e.T)/PICKUP.Tau)
+            excess[#excess+1] = e.Excess
+        end
+    end
+    ev.Events = kept
+    table.sort(excess)
+    local median = #excess > 0 and excess[math.floor((#excess+1)/2)] or 0
+    local last = kept[#kept]
+    local level = "none"
+    if #kept >= 3 and score >= 2.4 and median >= 6 then level = "strong"
+    elseif #kept >= 2 and score >= 1.5 then level = "suspected" end
+    return level, score, #kept, median, last and now-last.T or nil
+end
+function Extension:Notify(title, text, duration)
+    local captures = self.InputCaptures
+    if captures and captures[2] and type(captures[2].Notification) == "function" then
+        pcall(function() captures[2].Notification().new({Title=title, Description=text, Duration=duration or 6}) end)
+    end
+    self.LastNotice = title..": "..text
+end
+function Extension:EvidenceSummary()
+    local level, score, count, median, age = self:PickupLevel()
+    local ev = self.PickupEvidence or {Normal=0}
+    return string.format("%s suspected events=%d score=%.2f median excess=%.1f last=%s normal=%d",
+        level, count, score, median, age and string.format("%.0fs", age) or "-", ev.Normal or 0), level, score, count
+end
+-- Decide normal vs conditional strategy (plan tick, logs only on change).
+function Extension:UpdateRimStrategy()
+    if not self.PickupEvidence then self:ResetPickupEvidence() end
+    local ev = self.PickupEvidence
+    local mode = self.Settings.AutoPlayMagnetResponse or "Manual confirm"
+    local summary, level, score, count = self:EvidenceSummary()
+    local opponent = self.MatchOpponent
+    local scoped = ev.Key ~= nil and opponent ~= nil and pkey(opponent) == ev.Key and self:MatchPlayer(opponent)
+    local active, reason = false, nil
+    if self.Settings.AutoPlayRimOverride then
+        active, reason = true, "manual strategy override (test; not an accusation)"
+    elseif mode == "Off" then
+        reason = "detection response off"
+    elseif not scoped then
+        reason = "no evidence for the locked opponent"
+    elseif mode == "Manual confirm" then
+        if self.RimConfirmedKey == ev.Key then
+            if score >= 0.6 then active, reason = true, "you confirmed suspected abnormal pickups by "..tostring(ev.Name)
+            else
+                self.RimConfirmedKey = nil
+                self:Log("strategy", "evidence expired: confirmation cleared")
+                reason = "evidence expired"
+            end
+        elseif level ~= "none" and (self.RimPromptCount or 0) < count then
+            self.RimPromptCount = count
+            local _, _, _, median, age = self:PickupLevel()
+            self:Notify("Suspected abnormal pickups", string.format(
+                "%s: %d pickups beyond reach (median +%.1f studs, last %.0fs ago). Client-side estimate only. Press Confirm suspected opponent to use the rim strategy.",
+                tostring(ev.Name), count, median, age or 0), 8)
+            self:Log("strategy", "prompted for confirmation: "..summary)
+            reason = "awaiting your confirmation"
+        else reason = level == "none" and "insufficient evidence" or "awaiting your confirmation" end
+    elseif mode == "Auto (experimental)" then
+        if self.RimAutoActive and score < 1.0 then self.RimAutoActive = false
+        elseif not self.RimAutoActive and level == "strong" then self.RimAutoActive = true end
+        active = self.RimAutoActive
+        reason = active and "automatic: strong repeated suspected pickups by "..tostring(ev.Name) or "automatic: evidence below strong"
+    end
+    if active ~= (self.AdaptiveRimOnly == true) then
+        self:Log("strategy", (active and "conditional rim strategy ON: " or "normal strategy: ")..tostring(reason).." | "..summary)
+    end
+    self.AdaptiveRimOnly, self.AdaptiveReason = active, reason
+    return active
+end
+function Extension:ConfirmSuspectedOpponent()
+    if not self.PickupEvidence then self:ResetPickupEvidence() end
+    local ev = self.PickupEvidence
+    local summary, level = self:EvidenceSummary()
+    local opponent = self.MatchOpponent
+    if level == "none" or not opponent or pkey(opponent) ~= ev.Key then
+        self:Notify("Rim strategy", "No current suspected evidence for the locked opponent. Use Rim strategy override to test without evidence.", 6)
+        self:Log("strategy", "confirmation refused: "..summary)
+        return false
+    end
+    self.RimConfirmedKey = ev.Key
+    self:Notify("Rim strategy", "Using the rim strategy against "..tostring(ev.Name).." while evidence stays fresh. "..summary, 6)
+    self:Log("strategy", "user confirmed: "..summary)
+    return true
+end
+function Extension:ClearRimStrategy()
+    self.RimConfirmedKey, self.RimAutoActive = nil, false
+    self.Settings.AutoPlayRimOverride = false
+    if self.RimOverrideToggle and type(self.RimOverrideToggle.SetValue) == "function" then pcall(self.RimOverrideToggle.SetValue, false) end
+    self:Log("strategy", "cleared by user")
+end
+
 -- Basket-aware defense for Auto-play. Hoopz half-court play attacks one hoop;
 -- the defended basket is the goal on the attacker's court (nearest to the
 -- attacker, kept for the possession), never simply the hoop nearest to us.
@@ -2245,7 +2628,19 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     local along = dflat(here-attackerFlat):Dot(direction)
     local mode, spacing
     if self.TurnoverRetreat and (along>3 or rimDistance<10 or self.Clock-(self.TurnoverAt or self.Clock)>2.5) then self.TurnoverRetreat=nil end
-    if self.TurnoverRetreat and along<3 then
+    local camping = self.AdaptiveRimOnly == true
+    if camping and rimDistance > 55 then self.CampFarSince = self.CampFarSince or self.Clock else self.CampFarSince = nil end
+    if camping and rimDistance >= 20 then
+        -- Conditional rim strategy: stay deep on the attacker-rim line and
+        -- react laterally; step up when the attacker lingers far out, and
+        -- use normal rim protection/contests once he comes inside 20 studs.
+        local deep = math.min(9, rimDistance*0.5)
+        if self.CampFarSince and self.Clock-self.CampFarSince > 6 then
+            mode = "Rim strategy: step up"
+            deep = math.min(rimDistance-12, 25)
+        else mode = "Rim strategy: protect hoop" end
+        spacing = math.max(0.5, rimDistance-deep)
+    elseif self.TurnoverRetreat and along<3 then
         mode="Transition: protect hoop"
         spacing=math.max(4,rimDistance-10)
     elseif along < 0.5 then
@@ -2328,27 +2723,38 @@ function Extension:UpdateLocalHeadphones()
     self.LocalHeadphonesModel=model
     local ok,err=pcall(function()
         local width=math.max(.35,head.Size.X/2)
-        local top=head.Size.Y/2+.12
-        local dark=env.Color3.fromRGB(24,26,39)
-        local cushion=env.Color3.fromRGB(10,11,17)
+        local top=head.Size.Y/2+.1
+        local dark=env.Color3.fromRGB(22,24,36)
+        local cushion=env.Color3.fromRGB(8,9,14)
         local accent=env.Color3.fromRGB(255,95,163)
-        local function piece(name,size,offset,color,neon)
+        local cylinder=env.Enum.PartType and env.Enum.PartType.Cylinder
+        local function piece(name,size,offset,color,neon,round,roll)
             local part=env.Instance.new("Part");part.Name=name;part.Size=size
             part.Anchored=false;part.Massless=true;part.CanCollide=false;part.CanTouch=false;part.CanQuery=false
+            part.CastShadow=false
             part.Color=color;part.Material=neon and env.Enum.Material.Neon or env.Enum.Material.SmoothPlastic
-            part.CFrame=head.CFrame*env.CFrame.new(offset.X,offset.Y,offset.Z)
+            if round and cylinder then part.Shape=cylinder end
+            local placement=env.CFrame.new(offset.X,offset.Y,offset.Z)
+            if roll and env.CFrame.Angles then placement=placement*env.CFrame.Angles(0,0,roll) end
+            part.CFrame=head.CFrame*placement
             part.Parent=model
             local weld=env.Instance.new("WeldConstraint");weld.Part0=head;weld.Part1=part;weld.Parent=part
         end
         local v=env.Vector3.new
-        piece("BandTop",v(width*2+.28,.13,.3),v(0,top,0),dark)
-        piece("BandAccent",v(width*2+.15,.035,.14),v(0,top+.075,0),accent,true)
+        -- Curved headband: seven short segments on an arc over the head.
+        local reachX,reachY=width+.18,top+.05
+        for k=0,6 do
+            local angle=math.rad(-72+k*24)
+            local x,y=math.sin(angle)*reachX,math.cos(angle)*reachY
+            piece("Band"..k,v(.34,.11,.26),v(x,y-.02,0),dark,false,false,-angle)
+            if k>=2 and k<=4 then piece("BandGlow"..k,v(.3,.03,.1),v(x,y+.05,0),accent,true,false,-angle) end
+        end
+        -- Round ear cups (cylinder axis points out of the ear), cushions and rings.
         for _,side in ipairs({-1,1})do
             local tag=side<0 and "Left" or "Right"
-            piece(tag.."Band",v(.12,top,.3),v(side*(width+.08),top/2,0),dark)
-            piece(tag.."Cushion",v(.16,.63,.59),v(side*(width+.04),0,0),cushion)
-            piece(tag.."Cup",v(.25,.72,.65),v(side*(width+.23),0,0),dark)
-            piece(tag.."Accent",v(.035,.42,.35),v(side*(width+.375),0,0),accent,true)
+            piece(tag.."Cushion",v(.14,.66,.66),v(side*(width+.05),-.02,0),cushion,false,true)
+            piece(tag.."Cup",v(.24,.78,.78),v(side*(width+.22),-.02,0),dark,false,true)
+            piece(tag.."Ring",v(.05,.5,.5),v(side*(width+.36),-.02,0),accent,true,true)
         end
         model.Parent=character;self.LocalHeadphonesHead=head
     end)
@@ -2371,29 +2777,76 @@ function Extension:SetLocalHeadphones(enabled)
     self:UpdateLocalHeadphones()
     if not self.LocalMusicSound then self:MusicStatus("Headphones on; enter an audio ID to play") end
 end
+-- Roblox only plays audio an experience may use (same creator, <6 s, or
+-- Roblox/licensed catalog); other users' IDs are private and fail silently.
+-- MP3/OGG links or files are written to the executor workspace and played
+-- through getcustomasset, which is local to this client.
+local function audioKind(bytes)
+    if type(bytes)~="string" or #bytes<16 then return nil end
+    if bytes:sub(1,3)=="ID3" then return "mp3" end
+    if bytes:sub(1,4)=="OggS" then return "ogg" end
+    local a,b=bytes:byte(1,2)
+    if a==255 and b and b>=224 then return "mp3" end
+    return nil
+end
+function Extension:ResolveMusicSource(value)
+    local id=value:match("^(%d+)$") or value:match("^rbxassetid://(%d+)$")
+    if id then
+        if #id>20 or not id:find("[1-9]") then return nil,"Enter a numeric Roblox audio ID, an MP3/OGG link, or a file name" end
+        return "rbxassetid://"..id,"Roblox audio "..id,id
+    end
+    local env=self.Environment
+    local custom=env.getcustomasset or env.getsynasset
+    local isLink=value:match("^https?://[%w%._%-]+[/%?]?") ~= nil
+    local isFile=value:lower():match("%.mp3$") or value:lower():match("%.ogg$")
+    if not isLink and not isFile then return nil,"Enter a numeric Roblox audio ID, an MP3/OGG link, or a file name" end
+    if type(custom)~="function" then return nil,"This executor cannot play audio files (no getcustomasset); only Roblox catalog audio IDs work" end
+    local bytes,path
+    if isLink then
+        if type(env.writefile)~="function" then return nil,"This executor cannot save audio files (no writefile)" end
+        local ok,data=pcall(function() return env.game:HttpGet(value) end)
+        if not ok or type(data)~="string" then return nil,"Download failed: "..tostring(data) end
+        if #data>15*1024*1024 then return nil,"Audio file is larger than 15 MB" end
+        local kind=audioKind(data)
+        if not kind then return nil,"Link did not return MP3/OGG audio (use a direct file link)" end
+        local hash=0;for k=1,math.min(#value,200) do hash=(hash*31+value:byte(k))%2147483647 end
+        if type(env.makefolder)=="function" and not (type(env.isfolder)=="function" and env.isfolder("UltimateMusic")) then pcall(env.makefolder,"UltimateMusic") end
+        path="UltimateMusic/track_"..tostring(hash).."."..kind
+        local saved=pcall(env.writefile,path,data)
+        if not saved then path="UltimateMusic_track_"..tostring(hash).."."..kind;if not pcall(env.writefile,path,data) then return nil,"Could not save the downloaded audio" end end
+        bytes=data
+    else
+        path=value
+        if type(env.isfile)=="function" and not env.isfile(path) then return nil,"File not found in the executor workspace: "..path end
+    end
+    local ok,asset=pcall(custom,path)
+    if not ok or type(asset)~="string" or asset=="" then return nil,"Executor could not load the audio file: "..tostring(asset) end
+    return asset,(isLink and "downloaded track" or path),value
+end
 function Extension:PlayLocalMusic(raw,volume)
     if not self.Alive then return false end
     local value=tostring(raw or ""):match("^%s*(.-)%s*$")
-    local id=value:match("^(%d+)$") or value:match("^rbxassetid://(%d+)$")
-    if not id or #id>20 or not id:find("[1-9]") then self:MusicStatus("Enter a numeric Roblox audio ID");return false end
-    self:StopLocalMusic();self.LocalMusicID=id
+    local soundId,label,remember=self:ResolveMusicSource(value)
+    if not soundId then self:MusicStatus(label);return false end
+    self:StopLocalMusic();self.LocalMusicID=remember
     self.LocalMusicVolume=math.max(0,math.min(1,tonumber(volume) or self.LocalMusicVolume or .35))
     self:SetLocalHeadphones(true)
     local sound
     local ok,err=pcall(function()
         sound=self.Environment.Instance.new("Sound");self.LocalMusicSound=sound
-        sound.Name="UltimateLocalMusic";sound.SoundId="rbxassetid://"..id
+        sound.Name="UltimateLocalMusic";sound.SoundId=soundId
         sound.Volume=self.LocalMusicVolume;sound.Looped=true
         sound.Parent=self.Environment.game:GetService("SoundService")
         if sound.Loaded then self.LocalMusicLoaded=sound.Loaded:Connect(function()
-            if self.LocalMusicSound==sound then self:MusicStatus("Playing locally: "..id) end
+            if self.LocalMusicSound==sound then self:MusicStatus("Playing locally: "..label) end
         end) end
-        self:MusicStatus("Loading audio (must be available to this experience)")
+        self:MusicStatus("Loading "..label)
         sound:Play()
-        if sound.IsLoaded then self:MusicStatus("Playing locally: "..id) end
+        if sound.IsLoaded then self:MusicStatus("Playing locally: "..label) end
         self.Environment.task.delay(8,function()
             if self.LocalMusicSound==sound and not sound.IsLoaded then
-                self:MusicStatus("Audio did not load; check ID and audio permissions")
+                self:MusicStatus(soundId:find("^rbxassetid://") and "Audio did not load: Roblox blocks most uploaded IDs (privacy). Use a catalog ID, an MP3/OGG link, or a file."
+                    or "Audio file did not load; try another MP3/OGG")
             end
         end)
     end)
@@ -2426,7 +2879,8 @@ function Extension:OpenLocalMusicPanel()
     title.Active=true
     local close=text("TextButton","Close","X",290,8,30,28)
     local id=text("TextBox","AudioId",self.LocalMusicID or "",10,46,310,32)
-    id.PlaceholderText="Roblox audio ID";id.ClearTextOnFocus=false
+    id.PlaceholderText="Audio ID, MP3/OGG link, or file name";id.ClearTextOnFocus=false
+    if env.Enum.TextTruncate then pcall(function() id.TextTruncate=env.Enum.TextTruncate.AtEnd end) end
     local volumeLabel=text("TextLabel","VolumeLabel","Volume (0-100)",10,88,160,28)
     local volume=text("TextBox","Volume",tostring(math.floor((self.LocalMusicVolume or .35)*100)),180,88,140,28)
     volume.ClearTextOnFocus=false

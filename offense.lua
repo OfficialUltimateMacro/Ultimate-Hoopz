@@ -127,6 +127,8 @@ function Extension:ResetOffense()
     self.PreparingShot=false
     self.FakeShotStart, self.ForceShot, self.AttackMode = nil, nil, nil
     self.FreezeSince, self.FreezeLogged = nil, nil
+    self.BlockedSince, self.RimBlockedSince, self.RimFallbackLogged = nil, nil, nil
+    self.EscapeFlips, self.SideLockUntil, self.LastEscapeSide = nil, nil, nil
 end
 function Extension:ReleaseJumpKey()
     if not self.Environment then return end
@@ -178,13 +180,16 @@ function Extension:RequestAutoJump(humanoid, root, valid)
     return false
 end
 function Extension:PulseKey(name, hold, cooldown, force)
-    if self:IsManual() or self.Shooting then return false end
-    if not force and (not self.Settings.AutoPlayDribble or self.Clock-(self.LastDribble or -100) < 0.075) then return false end
+    local function refuse(reason) self.MoveRefusal=name..": "..reason;return false end
+    if self:IsManual() then return refuse("manual input owns controls") end
+    if self.Shooting then return refuse("shot in progress") end
+    if not force and not self.Settings.AutoPlayDribble then return refuse("dribble disabled") end
+    if not force and self.Clock-(self.LastDribble or -100) < 0.075 then return refuse("input floor 0.075s") end
     local key = self.Environment.Enum.KeyCode[name]
     self.MoveCooldowns = self.MoveCooldowns or {}
-    if self.Clock-(self.MoveCooldowns[name] or -100) < cooldown then return false end
-    if key == self.Settings.AutoGuardKeybind or key == self.Settings.AutoPlayKeybind then return false end
-    if self.Input:IsKeyDown(key) then return false end
+    if self.Clock-(self.MoveCooldowns[name] or -100) < cooldown then return refuse("move cooldown") end
+    if key == self.Settings.AutoGuardKeybind or key == self.Settings.AutoPlayKeybind then return refuse("key reserved") end
+    if self.Input:IsKeyDown(key) then return refuse("key physically held") end
     if not self.VirtualInput then
         local ok, service = pcall(self.Environment.game.GetService,self.Environment.game,"VirtualInputManager")
         if not ok or not service then self.DribbleStatus="Input unavailable";return false end
@@ -209,7 +214,7 @@ end
 function Extension:PulseDribble(name)
     -- Wait (bounded 0.6 s) while Hoopz reports an action from a previous move.
     local action = gameAction(self.Player and self.Player.Character)
-    if action=="Shooting" or action=="Dunking" then return false end
+    if action=="Shooting" or action=="Dunking" then self.MoveRefusal=name..": game "..action;return false end
     if action ~= nil and action ~= "" then
         if self.ActionSeenValue ~= action then
             self.ActionSeenValue, self.ActionSeenSince = action, self.Clock
@@ -219,7 +224,7 @@ function Extension:PulseDribble(name)
                 if self.Log then self:Log("action", "Hoopz Action value seen: "..tostring(action)) end
             end
         end
-        if self.Clock-(self.ActionSeenSince or self.Clock) < 0.6 then return false end
+        if self.Clock-(self.ActionSeenSince or self.Clock) < 0.6 then self.MoveRefusal=name..": previous move animating ("..tostring(action)..")";return false end
     else self.ActionSeenValue = nil end
     return self:PulseKey(name, 0.04, name == "R" and 0.32 or 0.16)
 end
@@ -328,10 +333,10 @@ function Extension:ResetRisk()
     self.RiskProfiles={};self.AdaptiveRimOnly=false;self.AdaptiveReason=nil
 end
 function Extension:SyncRisk()
-    -- Outcome counters are diagnostics only. Never force an offensive strategy.
-    self.AdaptiveRimOnly=false
+    -- Outcome counters (turnovers, failed releases) are diagnostics only and
+    -- never feed the conditional strategy, which UpdateRimStrategy owns.
     local profile=self:RiskProfile(self.MatchOpponent,false)
-    self.AdaptiveReason=profile and string.format("Outcomes only: losses=%d failed jumpers=%d",profile.Turnovers,profile.Unreleased) or nil
+    self.OutcomeSummary=profile and string.format("Outcomes only: losses=%d failed jumpers=%d",profile.Turnovers,profile.Unreleased) or nil
 end
 function Extension:ObserveRisk(player,kind)
     local profile=self:RiskProfile(player,true);if not profile then return end
@@ -347,9 +352,9 @@ function Extension:CanTakeShot(root)
     if not goal or not goal.Parent then self.ShotBlockReason="No attack basket selected";return false end
     if self:NearestGoal(root) ~= goal then self.ShotBlockReason="Selected basket is not the nearest";return false end
     if not self:InShotRange(root) then self.ShotBlockReason="Outside shooting range";return false end
-    local space,jumping=self:SpaceAt(root.Position,self.OpponentReads or {})
-    self.ShotContested=space<12 or jumping
-    if self.ShotContested then self.ShotBlockReason=(jumping and space>=12) and "Waiting for jump contest to clear" or "Waiting for 12 studs of shot space";return false end
+    -- Defender spacing never vetoes an in-range jumper (user preference:
+    -- shoot through contests). OffenseStep adds only a bounded pump fake
+    -- against a defender already airborne in front.
     if not self:ShotLaneClear(root,goal,self:MakeRayParams()) then
         -- After 8 s, a straight-line miss that ends near the hoop (rim/net
         -- structure) no longer blocks; a real wall in between still does.
@@ -795,12 +800,21 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local square = math.abs(defenderSide) < 1.2
     local preferred
     if square then
-        preferred = -(self.LastEscapeSide or 1)
+        -- Square defender: keep the previous side (or the ball-hand side)
+        -- instead of alternating, which produced left/right oscillation.
+        preferred = self.LastEscapeSide or (hand ~= 0 and (hand > 0 and 1 or -1)) or 1
     else preferred = defenderSide > 0 and -1 or 1 end
+    -- Flip guard: three side changes inside 3 s lock the current side 1.2 s.
+    local flips = self.EscapeFlips or {}
+    while flips[1] and now-flips[1] > 3 do table.remove(flips, 1) end
+    self.EscapeFlips = flips
+    if self.SideLockUntil and now < self.SideLockUntil and self.LastEscapeSide then preferred = self.LastEscapeSide end
     local closingSpeed = -flat(defender.Position-root.Position):Dot(defender.Velocity)/math.max(gap,0.01)
     -- Do not repeat a side that just failed to create space.
     local failed = self.EscapeFailed or {}
-    if failed[preferred] and now-failed[preferred] < 2 then preferred = -preferred end
+    if failed[preferred] and now-failed[preferred] < 2 and not (self.SideLockUntil and now < self.SideLockUntil) then preferred = -preferred end
+    local clearanceNow=30
+    for _,opponent in ipairs(opponents)do clearanceNow=math.min(clearanceNow,flat(opponent.Predicted-root.Position).Magnitude) end
     local chosen,bestScore=nil,-math.huge
     for _,exit in ipairs({{preferred,7,-3},{-preferred,7,-3},{preferred,4,-7},{-preferred,4,-7},{preferred,9,1},{-preferred,9,1}})do
         local side=exit[1]
@@ -808,18 +822,28 @@ function Extension:PlanEscape(root, destination, opponents, ball)
         -- through the handler's hands. Score both exits against every defender.
         local point=root.Position+lateral*side*exit[2]+forward*(gap<8 and exit[3] or math.max(0,exit[3]))
         if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
-            local clearance=30
+            -- Score the whole exit: end and midpoint clearance against current
+            -- and predicted defender positions, plus separation gained.
+            local clearance,middle=30,30
+            local mid=(root.Position+point)/2
             for _,opponent in ipairs(opponents)do
-                clearance=math.min(clearance,flat(opponent.Predicted-point).Magnitude)
+                clearance=math.min(clearance,flat(opponent.Predicted-point).Magnitude,flat(opponent.Position-point).Magnitude)
+                middle=math.min(middle,flat(opponent.Predicted-mid).Magnitude,flat(opponent.Position-mid).Magnitude)
             end
             local bodySide=(point-root.Position):Dot(root.CFrame.RightVector)>=0 and 1 or -1
             local protected=hand*bodySide>0 and 0.7 or 0
-            local score=clearance+protected+(side==preferred and 0.4 or 0)
+            local sticky=(side==preferred and 0.4 or 0)+((self.SideLockUntil and now<self.SideLockUntil and side==self.LastEscapeSide) and 3 or 0)
+            local score=math.min(clearance,middle+2)+0.3*(clearance-clearanceNow)+protected+sticky
             if score>bestScore then chosen,bestScore={Side=side,BodySide=bodySide,Point=point},score end
         end
     end
-    if not chosen then return nil end
+    if not chosen then self.SpacingReason="no escape exit clear of defenders";return nil end
     self.EscapeCount = (self.EscapeCount or 0)+1
+    if self.LastEscapeSide and chosen.Side ~= self.LastEscapeSide then
+        flips[#flips+1]=now
+        if #flips>=3 then self.SideLockUntil=now+1.2;self:Log("dribble","escape side flipping: locked "..(self.LastEscapeSide>0 and "right" or "left").." 1.2s") end
+        if self.SideLockUntil and now<self.SideLockUntil then chosen.Side=self.LastEscapeSide end
+    end
     self.LastEscapeSide = chosen.Side
     if closingSpeed > 8 and gap >= 9 and gap < 10 and self.Clock-((self.MoveCooldowns or {}).R or -100) >= 0.4 then
         -- Hesitation: plant briefly with a fake-out, then escape away from
@@ -833,6 +857,45 @@ function Extension:PlanEscape(root, destination, opponents, ball)
     local move=self:EscapeMove(chosen.BodySide,hand,square and gap>7)
     if move then self:PulseDribble(move) end
     return self.Plan
+end
+
+-- Bounded fallback after 1.5 s without any safe route: move up to 10 studs
+-- directly away from the nearest current/predicted defender, within the
+-- court and on supported floor. At most once per 1.2 s.
+function Extension:SpaceReset(root, opponents)
+    local now=self.Clock
+    self.BlockedSince=self.BlockedSince or now
+    if now-self.BlockedSince<1.5 or now<(self.NextSpaceReset or -100) then return nil end
+    self.NextSpaceReset=now+1.2
+    local nearest,gap=nil,math.huge
+    for _,opponent in ipairs(opponents)do
+        local d=math.min(flat(opponent.Position-root.Position).Magnitude,flat(opponent.Predicted-root.Position).Magnitude)
+        if d<gap then nearest,gap=opponent,d end
+    end
+    if not nearest then return nil end
+    -- Combined repulsion from every nearby defender (current and predicted),
+    -- so leaving one defender never walks into another.
+    local push=self.Environment.Vector3.new()
+    for _,opponent in ipairs(opponents)do
+        for _,position in ipairs({opponent.Position,opponent.Predicted})do
+            local offset=flat(root.Position-position);local d=offset.Magnitude
+            if d<14 and d>0.01 then push=push+offset/(d*d) end
+        end
+    end
+    local away=push.Magnitude>0.001 and unit(push) or unit(flat(root.Position-nearest.Predicted))
+    local params=self:MakeRayParams()
+    for _,degrees in ipairs({0,35,-35,70,-70,105,-105})do
+        for _,length in ipairs({10,6})do
+            local point=root.Position+rotate(away,math.rad(degrees))*length
+            if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
+                self:Log("dribble",string.format("space reset after %.1fs blocked: %d deg, %d studs",now-self.BlockedSince,degrees,length))
+                self.BlockedSince=nil
+                return point
+            end
+        end
+    end
+    self:Log("dribble","space reset refused: "..tostring(self.SpacingReason))
+    return nil
 end
 
 ---------------------------------------------------------------------------
@@ -895,6 +958,7 @@ function Extension:OffenseStep(character, humanoid, root)
     local minimum = self.Settings.AimbotType == "High" and 57 or 58
     local params = self:MakeRayParams()
     self.ForceShot = held >= 8
+    local rimStrategy = self.AdaptiveRimOnly == true and self.Settings.AutoPlayDunk ~= false
     -- Rim attack: inside the jumper ring the calibrated shot cannot score, so
     -- drive and dunk instead of backing out. Also drive from the near edge of
     -- the ring when pressed hard and the corridor to the rim is empty.
@@ -908,6 +972,16 @@ function Extension:OffenseStep(character, humanoid, root)
                     and flat(opponent.Position-goal.Position).Magnitude < rimDistance then corridor = false end
             end
             if corridor then self.DunkMode, self.DriveUntil = true, now+3 end
+        end
+        -- Conditional rim strategy: prefer safe drives/dunks over jumpers.
+        -- A blocked lane for 2.5 s still allows a normal, space-checked jumper.
+        if rimStrategy then
+            local fallback = self.RimBlockedSince and now-self.RimBlockedSince > 2.5 and self:CanTakeShot(root)
+            self.DunkMode = not fallback
+            if fallback and not self.RimFallbackLogged then
+                self.RimFallbackLogged = true
+                self:Log("strategy", "rim lane blocked 2.5s: open space-checked jumper allowed")
+            end
         end
     else self.DunkMode=false end
     if self.DunkMode then
@@ -923,9 +997,15 @@ function Extension:OffenseStep(character, humanoid, root)
         end
         if plan and plan.Kind=="hesitate" then self:StopAutoMove();self.AutoPlayStatus="Hesitation at the rim"
         elseif point then
-            self.AutoMovePoint=point;self.AutoPlayStatus=plan and "Rim drive: lateral escape" or "Driving to the rim"
+            self.RimBlockedSince,self.RimFallbackLogged=nil,nil
+            self.AutoMovePoint=point;self.AutoPlayStatus=(rimStrategy and "Rim strategy: " or "")..(plan and "Rim drive: lateral escape" or "Driving to the rim")
             if not plan then self:ChooseDribble(root,point,opponents,heldBall(character)) end
-        else self:StopAutoMove();self.AutoPlayStatus="No safe rim lane: hold and shield" end
+        else
+            self.RimBlockedSince=self.RimBlockedSince or now
+            local reset=self:SpaceReset(root,opponents)
+            if reset then self.AutoMovePoint=reset;self.AutoPlayStatus="Space reset: no safe rim lane"
+            else self:StopAutoMove();self.AutoPlayStatus="No safe rim lane: hold and shield" end
+        end
         return false
     end
     local canShoot = self:CanTakeShot(root)
@@ -993,6 +1073,11 @@ function Extension:OffenseStep(character, humanoid, root)
         self:StopAutoMove();self.AutoPlayStatus="Hesitation: reading the defender";return false
     end
     local point = plan and plan.Point or self:SteerTo(root,self.ShotSpot,opponents)
+    if point then self.BlockedSince=nil end
+    if not point then
+        point=self:SpaceReset(root,opponents)
+        if point then self.AutoMovePoint=point;self.AutoPlayStatus="Space reset: route blocked";return false end
+    end
     if point then
         self.AutoMovePoint=point
         if plan then self.AutoPlayStatus=(plan.Side>0 and "Escape right" or "Escape left")

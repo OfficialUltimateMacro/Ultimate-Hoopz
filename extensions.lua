@@ -56,6 +56,7 @@ function Extension:CaptureTrace()
         tostring(self.ProtectFacing==true),tostring(self.PreparingShot==true),tostring(self.DribbleStatus).." spacing="..tostring(self.SpacingReason or "-"),
         tostring(self.AutoPlayStatus),tostring(self.ShotBlockReason))
     row=row..string.format(" gap=%.1f predictedGap=%.1f reroutes=%d retreat=%s",gap,predGap,self.RerouteCount or 0,tostring(self.TurnoverRetreat==true))
+    row=row.." strategy="..(self.AdaptiveRimOnly and "rim" or "normal").." refused="..tostring(self.MoveRefusal or "-")
     self.TraceLog=self.TraceLog or {};table.insert(self.TraceLog,row)
     if #self.TraceLog>120 then table.remove(self.TraceLog,1) end
 end
@@ -178,7 +179,8 @@ function Extension:SetAutoPlay(enabled)
         -- Auto-play defends on its own, so Blessed's Auto Guard is switched
         -- off (one movement writer) and restored when Auto-play stops.
         self.AutoPlaySnapshot, self.AutoPlayApplied = {}, {}
-        for name, value in pairs({Aimbot=true, AutoGuard=false, BallMagnet=true, BallReach=true}) do
+        -- Ball Magnet is never enabled automatically; only the user turns it on.
+        for name, value in pairs({Aimbot=true, AutoGuard=false, BallReach=true}) do
             self.AutoPlaySnapshot[name] = self.Settings[name]
             self.AutoPlayApplied[name] = value
             self:SetFeature(name, value)
@@ -289,6 +291,7 @@ function Extension:UpdateState(character, humanoid, root)
 end
 function Extension:AutoPlayStep(character, humanoid, root)
     local state, holder = self:UpdateState(character, humanoid, root)
+    if self.UpdateRimStrategy then self:UpdateRimStrategy() end
     if state == "Manual" then
         if self.ResetOffense and self.OffenseCharacter then self:ResetOffense() end
         self:StopAutoMove(); self.StopReason = "manual input ("..tostring(self.ManualReason)..")"
@@ -390,6 +393,12 @@ function Extension:Tick(dt)
     end
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     if self.ShotTrack and self.TrackShot then self:TrackShot() end
+    if self.Settings.AutoPlay and self.SamplePickups then
+        local ok,message=pcall(self.SamplePickups,self)
+        if not ok and self.Clock>=(self.NextSampleError or -100) then
+            self.NextSampleError=self.Clock+5;self:Log("error","pickup sampler: "..tostring(message))
+        end
+    end
     self:CaptureTrace()
     self.TickAccumulator = (self.TickAccumulator or 0) + dt
     -- Faster decisions when an attacker is close; 10 Hz otherwise.
@@ -486,7 +495,11 @@ function Extension:StatusText()
             .." near rim "..tostring(self.ShotsNearRim or 0).." | dunks "..tostring(self.DunkAttempts or 0).."/"..tostring(self.DunksStarted or 0)
             .." | contests "..tostring(self.ContestCount or 0),
         "Dribble "..tostring(self.DribbleStatus or "-").." | shield "..tostring(self.ProtectFacing==true).." | setup "..tostring(self.PreparingShot==true),
-        "Policy "..tostring(self.AdaptiveRimOnly and "Adaptive rim-only" or "Space-first").." | "..tostring(self.AdaptiveReason or "no repeated failures") ,
+        "Refused: move "..tostring(self.MoveRefusal or "-").." | route "..tostring(self.SpacingReason or "-"),
+        "Defense "..tostring(self.DefenseMode or "-").." vs "..name(self.State=="Opponent" and self.Holder or nil).." | "..tostring(self.DefenseIntent or "-"),
+        "Strategy "..tostring(self.AdaptiveRimOnly and "CONDITIONAL rim strategy" or "normal").." ("..tostring(self.Settings.AutoPlayMagnetResponse or "Manual confirm")
+            ..(self.Settings.AutoPlayRimOverride and ", override" or "")..") | "..tostring(self.AdaptiveReason or "-"),
+        "Evidence "..(self.EvidenceSummary and (self:EvidenceSummary()) or "-").." | last "..tostring(self.PickupEvidence and self.PickupEvidence.LastDecision or "-"),
         "Arc "..tostring(self.Settings.AimbotType).." delay "..tostring(self.Settings.ShotDelay).." | planning "..tostring(self.PlanCount or 0),
         "Last error: "..tostring(self.LastError or "none"),
     }
@@ -508,6 +521,9 @@ function Extension:Install(environment, settings)
         settings.AutoPlayKeybind = environment.Enum.KeyCode.J
         settings.AutoPlayCamera = true
         settings.AutoPlayDunk = true
+        settings.AutoPlayMagnetResponse = settings.AutoPlayMagnetResponse or "Manual confirm"
+        settings.AutoPlayRimOverride = false
+        settings.BallMagnet = UltimatePreferences.BallMagnet
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -525,6 +541,9 @@ function Extension:Install(environment, settings)
     settings.AutoPlayKeybind = environment.Enum.KeyCode.J
     settings.AutoPlayCamera = true
     settings.AutoPlayDunk = true
+    settings.AutoPlayMagnetResponse = "Manual confirm"
+    settings.AutoPlayRimOverride = false
+    settings.BallMagnet = UltimatePreferences.BallMagnet
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -620,6 +639,20 @@ function Extension:InstallControls(section)
         if type(copy)=="function" then pcall(copy,text) end
         self.LastLogCopy=text
     end})
+    -- Conditional strategy against suspected abnormal pickups. Manual confirm
+    -- (default) only prompts; Auto acts after strong repeated evidence;
+    -- Override forces the rim strategy for testing without evidence.
+    section:NewDropdown({Title="Magnet response",Data={"Manual confirm","Off","Auto (experimental)"},Default="Manual confirm",Callback=function(value)
+        self.Settings.AutoPlayMagnetResponse=value
+        self.RimAutoActive=false
+        self:Log("strategy","response mode "..tostring(value))
+    end})
+    section:NewButton({Title="Confirm suspected opponent",Callback=function() self:ConfirmSuspectedOpponent() end})
+    self.RimOverrideToggle=section:NewToggle({Title="Rim strategy override",Default=false,Callback=function(value)
+        self.Settings.AutoPlayRimOverride=value==true
+        self:Log("strategy","override "..(value and "on" or "off"))
+    end})
+    section:NewButton({Title="Clear rim strategy",Callback=function() self:ClearRimStrategy() end})
     section:NewDropdown({Title = "Attack basket", Data = {"Nearest", "Second nearest"}, Default = "Nearest", Callback = function(value)
         self.Settings.AutoPlayBasket = value
         if self.ResetOffense then self:ResetOffense() end

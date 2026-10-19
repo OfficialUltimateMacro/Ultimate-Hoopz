@@ -38,7 +38,7 @@ local env={Enum={KeyCode=setmetatable({},{__index=function(_,k)return k end}),Ma
 function env.workspace:GetDescendants()return self.parts end
 local services={Players=ps,UserInputService=input,RunService=rs,CollectionService=collection};env.game={GetService=function(_,n)return assert(services[n],n)end}
 local function settings()return {Aimbot=true,AutoGuard=true,AutoGuardKeybind='L',AutoGuardBallCheck=true,BallMagnet=true,BallReach=true,AimbotType='Low'}end
-local s=settings();e:Install(env,s);assert(s.AimbotKeybind==nil and s.AutoPlay==false and s.AutoGuardJumpMatch)
+local s=settings();e:Install(env,s);assert(s.BallMagnet==false,'startup forces Ball Magnet off');assert(s.AimbotKeybind==nil and s.AutoPlay==false and s.AutoGuardJumpMatch)
 local newer=settings();e:Install(env,newer);s=newer
 local title,aimChanges,guardChanges=nil,0,0
 local description,notices=nil,0
@@ -70,10 +70,11 @@ s.AutoGuard=false;ah.Jumping:Fire(true);assert(not oh.Jump);s.AutoGuard=true
 local old=e.JumpConnection;a.Character=select(1,player()).Character;e:SelectTarget(a);assert(not old.Connected and e.TargetCharacter==a.Character,'respawn rebind')
 e:ClearTarget();selected=nil
 s.Aimbot=false;s.AutoGuard=false;s.BallMagnet=false;s.BallReach=false
-e:SetAutoPlay(true);assert(s.Aimbot and not s.AutoGuard and s.BallMagnet and s.BallReach,'Auto-play turns Auto Guard off (it defends itself)')
+e:SetAutoPlay(true);assert(s.Aimbot and not s.AutoGuard and not s.BallMagnet and s.BallReach,'Auto-play turns Auto Guard off and never enables Ball Magnet')
 e.AutoMovePoint=vec(8);rs.bindings[e.RenderName]();assert(oh.moves==1,'render uses rebound settings')
 input.down.W=true;local n=oh.moves;rs.bindings[e.RenderName]();assert(oh.moves==n);e:AutoPlayStep(own.Character,oh,orr);assert(e.AutoPlayStatus=='Paused: manual input' and not e.AutoMovePoint)
 input.down.W=nil;e.Clock=4;e:SetAutoPlay(false);assert(not s.Aimbot and not s.AutoGuard and not s.BallMagnet and not s.BallReach)
+s.BallMagnet=true;e:SetAutoPlay(true);assert(s.BallMagnet,'manual Ball Magnet survives Auto-play enable');e:SetAutoPlay(false);assert(s.BallMagnet,'manual Ball Magnet survives Auto-play disable');s.BallMagnet=false
 local function part(name,x,owner)local p={Name=name,Position=vec(x),Parent=true,owner=owner};function p:IsA(t)return t=='BasePart'end;function p:IsDescendantOf(c)return c==self.owner end;return p end
 local loose=part('Basketball',10);local owned=part('Ball',2,b.Character);env.workspace.parts={owned,loose,part('Ball',70)}
 assert(e:LooseBall(orr)==loose);loose.owner=a.Character;assert(e:LooseBall(orr)==nil,'cached pickup rechecks ownership')

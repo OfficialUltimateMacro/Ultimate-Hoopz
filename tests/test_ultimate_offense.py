@@ -58,10 +58,10 @@ root.Position=spot;root.AssemblyLinearVelocity=v();e.Clock=1
 assert(not e:OffenseStep(own.Character,oh,root));e.Clock=1.3;assert(e:OffenseStep(own.Character,oh,root),'open and settled allows shot')
 er.Position=root.Position+v(-5,0,0);eh.FloorMaterial='Air'
 e.Clock=2;e.OpenSince=nil;e.SettlePosition=nil
-assert(not e:OffenseStep(own.Character,oh,root) and e.ShotBlockReason=='Waiting for 12 studs of shot space','wait for actual separation instead of contested shot')
-e.Clock=2.5;assert(not e:OffenseStep(own.Character,oh,root),'timeout never bypasses defender spacing')
-er.Position=root.Position+v(-1,0,0);eh.FloorMaterial='Ground';e.Clock=2.55
-assert(not e:OffenseStep(own.Character,oh,root),'zero space never sends a jumper')
+assert(not e:OffenseStep(own.Character,oh,root) and e.AutoPlayStatus=='Pump fake: defender in the air','airborne blocker in front: brief pump fake')
+e.Clock=2.5;assert(e:OffenseStep(own.Character,oh,root),'pump fake bounded: shoots through the contest')
+er.Position=root.Position+v(-1,0,0);eh.FloorMaterial='Ground';e.Clock=2.55;e.FakeShotStart=nil
+assert(e:OffenseStep(own.Character,oh,root),'zero space still shoots (user preference)')
 e:ReleaseDribbleKeys(true)
 -- Inside the ring: drive to the rim and press T, not back out to the 3.
 er.Position=v(200,3,200);e:ResetOffense();e.OffenseGoal=goal;e.GoalDirection=v(1,0,0);e.OffenseCharacter=own.Character
@@ -126,6 +126,6 @@ end
 assert(shots==1 and e:InShotRange(root),'positioning loop arrives and shoots')
 world.blockAll=true;root.Position=v(110,3,0);e.Clock=e.Clock+2;e:ResetOffense();e:OffenseStep(own.Character,oh,root);assert(not e.AutoMovePoint,'fully blocked route stops')
 e:Destroy();assert(not next(e.DribbleKeys) and not runService.bindings[e.RenderName])
-return 'PASS: possession movement, shot positioning and arrival simulation, teammate/court filters, bounded opponent prediction, clear-space shot gating, airborne and zero-space refusal, inside-ring rim drive and T dunk, obstruction gates, obstacle/ledge steering, screenshot F/G/R/V/C inputs and cooldown/release, focus/key conflicts, queued-shot cancellation, blocked-route stop and cleanup'
+return 'PASS: possession movement, shot positioning and arrival simulation, teammate/court filters, bounded opponent prediction, contested and zero-space shots allowed, bounded airborne pump fake, inside-ring rim drive and T dunk, obstruction gates, obstacle/ledge steering, screenshot F/G/R/V/C inputs and cooldown/release, focus/key conflicts, queued-shot cancellation, blocked-route stop and cleanup'
 '''.replace('SOURCE','[====['+source+']====]')
 print(run(lua).decode())

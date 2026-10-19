@@ -1,12 +1,13 @@
 {
-  "sha256": "f9c340b3c3a6489883cf2ce8ee5ac4b1d5ab085cd65b22edc5a70992c8c415ce",
-  "checked_at": "2026-10-19T02:30:28.248683+00:00",
+  "sha256": "1824bee7c72e1031e01383815181ee4e10f743e45cfb7be4143bb1136f9bebb5",
+  "checked_at": "2026-10-19T03:22:51.665430+00:00",
   "offline_only": true,
+  "live_Hoopz_tested": false,
   "suites": [
     {
       "suite": "test_adaptive_policy.py",
       "passed": true,
-      "output": "PASS: guard lock across key/UI/mobile/external edits, off notice and restoration; opponent-specific adaptation, clear-space shots, hoop protection, protective waiting and safe dunk gating"
+      "output": "PASS: guard lock across key/UI/mobile/external edits, off notice and restoration; opponent-specific adaptation, contested in-range shots allowed, hoop protection, protective waiting and safe dunk gating"
     },
     {
       "suite": "test_aggressive_autoplay.py",
@@ -39,9 +40,14 @@
       "output": "PASS: .10s move spacing, .20s same-move and .40s R cooldown, .04s holds, fast randomized chain selection with safe transfers, manual pause and cleanup"
     },
     {
+      "suite": "test_escape_stability.py",
+      "passed": true,
+      "output": "PASS: escape side stability, cooldowns, bounded space reset and manual handback"
+    },
+    {
       "suite": "test_local_headphones.py",
       "passed": true,
-      "output": "PASS: local custom visual, no physics mutation, respawn, ID/volume validation, playback replacement/loading/error, draggable reusable controls, off/stop/unload and stale-callback cleanup"
+      "output": "PASS: local custom visual (curved band, round cups), MP3/OGG link and workspace-file playback via getcustomasset, privacy/missing/unsupported messages, no physics mutation, respawn, ID/volume validation, playback replacement/loading/error, draggable reusable controls, off/stop/unload and stale-callback cleanup"
     },
     {
       "suite": "test_match_context.py",
@@ -61,7 +67,12 @@
     {
       "suite": "test_performance.py",
       "passed": true,
-      "output": "{\n \"defending_10s\": {\n  \"CFrame\": 583.0,\n  \"GetPlayers\": 18.0,\n  \"GetTagged\": 5.0,\n  \"MoveTo\": 125.0,\n  \"Raycast\": 744.0,\n  \"RaycastParams\": 10.0,\n  \"added_connections\": 1.0,\n  \"cpu_ms\": 43.0,\n  \"heartbeat_connections\": 1.0,\n  \"mem_kb_growth\": 6.129,\n  \"plan_ms\": 15.0,\n  \"render_max_us\": 2000.0,\n  \"render_ms\": 16.0\n },\n \"holding_ball_10s\": {\n  \"CFrame\": 600.0,\n  \"GetPlayers\": 20.0,\n  \"GetTagged\": 4.0,\n  \"MoveTo\": 227.0,\n  \"Raycast\": 3100.0,\n  \"RaycastParams\": 10.0,\n  \"added_connections\": 0.0,\n  \"cpu_ms\": 156.0,\n  \"heartbeat_connections\": 1.0,\n  \"mem_kb_growth\": 48.067,\n  \"plan_ms\": 38.0,\n  \"render_max_us\": 3000.0,\n  \"render_ms\": 104.0\n },\n \"seeking_ball_10s\": {\n  \"GetDescendants\": 1.0,\n  \"GetPlayers\": 17.0,\n  \"MoveTo\": 1.0,\n  \"added_connections\": 1.0,\n  \"cpu_ms\": 5.0,\n  \"heartbeat_connections\": 1.0,\n  \"mem_kb_growth\": 6.822,\n  \"plan_ms\": 2.0,\n  \"render_max_us\": 0.0,\n  \"render_ms\": 0.0\n }\n}\nPASS: performance budgets"
+      "output": "PASS: performance budgets"
+    },
+    {
+      "suite": "test_pickup_evidence.py",
+      "passed": true,
+      "output": "PASS: normal steals/rebounds ignored, single anomaly insufficient, flicker/stale/teleport/made-basket/ball-teleport rejected, velocity allowance, suspected prompt without action, manual confirm, decay exit, auto needs strong, off mode, override without accusation, opponent/court scoping and reset"
     },
     {
       "suite": "test_player_collisions.py",
@@ -72,6 +83,11 @@
       "suite": "test_reactive_turnover.py",
       "passed": true,
       "output": "PASS: live waypoint invalidation, alternate exit validation, immediate stale-route stop, confirmed turnover priority, hoop retreat, contest-aim suppression and gap diagnostics"
+    },
+    {
+      "suite": "test_rim_strategy.py",
+      "passed": true,
+      "output": "PASS: normal jumper vs strategy drive+dunk, bounded blocked-lane fallback, normal close-out vs deep rim protection facing the attacker, lateral camping, step-up, inside-20 normal contest, loose-ball recovery, opponent scoping"
     },
     {
       "suite": "test_spacing.py",
@@ -91,17 +107,18 @@
     {
       "suite": "test_ultimate_offense.py",
       "passed": true,
-      "output": "PASS: possession movement, shot positioning and arrival simulation, teammate/court filters, bounded opponent prediction, clear-space shot gating, airborne and zero-space refusal, inside-ring rim drive and T dunk, obstruction gates, obstacle/ledge steering, screenshot F/G/R/V/C inputs and cooldown/release, focus/key conflicts, queued-shot cancellation, blocked-route stop and cleanup"
+      "output": "PASS: possession movement, shot positioning and arrival simulation, teammate/court filters, bounded opponent prediction, contested and zero-space shots allowed, bounded airborne pump fake, inside-ring rim drive and T dunk, obstruction gates, obstacle/ledge steering, screenshot F/G/R/V/C inputs and cooldown/release, focus/key conflicts, queued-shot cancellation, blocked-route stop and cleanup"
     },
     {
       "suite": "test_video_regressions.py",
       "passed": true,
-      "output": "PASS S1 stale container: defends basket-side vs dribbling attacker -- first good 0.02s, good frames 240/240\nPASS S2 turns to face attacker behind -- facing dot 1.00\nPASS S2 recovers basket-side after being beaten -- recovered at 0.31666666666666665\nPASS S3 turnover reaction time -- defense movement after 0.066666666666666666 s\nPASS S3 baseline drive: ends rim-side of attacker -- along 3.3, our rim distance 1.0\nPASS S4 left/right changes: mean lateral error -- mean 3.00 studs, MoveTo 115 over 6s\nPASS S5 defends the attacker hoop, not the nearest hoop -- along 3.9 lateral 0.6\nPASS S7 brief dribble reparent: no possession flip or fake release -- flips 0 state Own\nPASS S8 death during shot clears flags -- shooting false aim 0 track nil\nPASS S9 stale game Action: resumes within bound -- moved after 2.8 s\nPASS S10 camera intervention keeps defending -- moved 10.0 studs, facing released true\nPASS S12 no close-up snaps from small parts on the camera ray -- min camera radius 10.60, assist engaged 359/360 frames\nPASS S11 camera continuity across possessions -- max frame jump 1.50\nPASS S11 original shot camera restore respected, smooth resume -- ok true max jump 0.00\nPASS S13 holds a good spot without MoveTo spam -- MoveTo 0 in 3s; Close out: holding good basket-side spot\nPASS S13 stalled controller detected and re-issued -- watchdog log present: true\nPASS S14 single movement writer during Auto-play -- alternating writes 0 of 1\nPASS S15 long run: no connection growth, bounded memory/log -- heartbeat 1->1, log 60, mem +-4600 KB\nPASS: all 18 video-derived scenarios"
-    },
-    {
-      "suite": "test_ultimate_preferences.py",
-      "passed": true,
-      "output": "original True nil actions 2101\nTextLabel.Text=Ultimate\nTextLabel.Text=Welcome, Tester\nTextLabel.Text=Shooting\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=Physics\nTextButton.Text=\nTextLabel.Text=Settings\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=Ball Magnet\nTextButton.Text=\nTextLabel.Text=Magnet Strength\nTextBox.Text=50\nTextLabel.Text=Ball Reach\nTextButton.Text=\nTextLabel.Text=Reach Strength\nTextBox.Text=2\nTextLabel.Text=\nTextLabel.Text=\nTextLabel.Text=Anti Drop\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=Auto Guard\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=\nTextLabel.Text=Controller\nTextButton.Text=\nTextLabel.Text=Guard\nTextLabel.Text=Ball Check\nTextButton.Text=\nTextLabel.Text=Offset\nTextBox.Text=3.0\nTextLabel.Text=Prediction\nTextBox.Text=1.5\nTextLabel.Text=Auto Guard key\nTextButton.Text=\nTextLabel.Text=L\nTextLabel.Text=L\nTextLabel.Text=WalkSpeed\nTextBox.Text=0.01\nTextLabel.Text=Aimbot\nTextButton.Text=\nTextLabel.Text=Shot Delay\nTextBox.Text=0.28\nTextLabel.Text=Keybind\nTextButton.Text=\nTextLabel.Text=Unknown\nTextLabel.Text=Unknown\nTextLabel.Text=Type\nTextLabel.Text=High\nTextButton.Text=\nTextLabel.Text=Method\nTextLabel.Text=Mouse\nTextButton.Text=\nTextLabel.Text=Booster\nTextButton.Text=\nTextLabel.Text=Staff\nTextButton.Text=\nTextLabel.Text=Tester\nTextButton.Text=\nTextLabel.Text=Twitch\nTextButton.Text=\nTextLabel.Text=VIP\nTextButton.Text=\nTextLabel.Text=Youtuber\nTextButton.Text=\nTextLabel.Text=Device Spoofer\nTextLabel.Text=Service.Players.LocalPlayer.GetAttribute()\nTextButton.Text=\nreconstructed True nil actions 2708\nTextLabel.Text=Ultimate\nTextLabel.Text=Welcome, Tester\nTextLabel.Text=Shooting\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=Physics\nTextButton.Text=\nTextLabel.Text=Settings\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=Ball Magnet\nTextButton.Text=\nTextLabel.Text=Magnet Strength\nTextBox.Text=50\nTextLabel.Text=Ball Reach\nTextButton.Text=\nTextLabel.Text=Reach Strength\nTextBox.Text=2\nTextLabel.Text=\nTextLabel.Text=\nTextLabel.Text=Anti Drop\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=Auto Guard\nTextButton.Text=\nTextLabel.Text=\nTextLabel.Text=\nTextLabel.Text=Controller\nTextButton.Text=\nTextLabel.Text=Guard\nTextLabel.Text=Ball Check\nTextButton.Text=\nTextLabel.Text=Offset\nTextBox.Text=3.0\nTextLabel.Text=Prediction\nTextBox.Text=1.5\nTextLabel.Text=Auto Guard key\nTextButton.Text=\nTextLabel.Text=L\nTextLabel.Text=L\nTextLabel.Text=WalkSpeed\nTextBox.Text=0.01\nTextLabel.Text=Match target jump\nTextButton.Text=\nTextLabel.Text=Auto-play\nTextButton.Text=\nTextLabel.Text=Auto-play key\nTextButton.Text=\nTextLabel.Text=J\nTextLabel.Text=J\nTextLabel.Text=Auto-play dribble\nTextButton.Text=\nTextLabel.Text=Auto-play camera\nTextButton.Text=\nTextLabel.Text=Auto-dunk\nTextButton.Text=\nTextLabel.Text=Shot status\nTextButton.Text=\nTextLabel.Text=Copy Auto-play log\nTextButton.Text=\nTextLabel.Text=Attack basket\nTextLabel.Text=Nearest\nTextButton.Text=\nTextLabel.Text=Opponent\nTextLabel.Text=Auto (this court)\nTextButton.Text=\nTextLabel.Text=Lock court here\nTextButton.Text=\nTextLabel.Text=Lock viewed hoop\nTextButton.Text=\nTextLabel.Text=Local headphones\nTextButton.Text=\nTextLabel.Text=Music controls\nTextButton.Text=\nTextLabel.Text=Player collisions\nTextButton.Text=\nTextLabel.Text=Aimbot\nTextButton.Text=\nTextLabel.Text=Shot Delay\nTextBox.Text=0.28\nTextLabel.Text=Type\nTextLabel.Text=High\nTextButton.Text=\nTextLabel.Text=Method\nTextLabel.Text=Mouse\nTextButton.Text=\nTextLabel.Text=Booster\nTextButton.Text=\nTextLabel.Text=Staff\nTextButton.Text=\nTextLabel.Text=Tester\nTextButton.Text=\nTextLabel.Text=Twitch\nTextButton.Text=\nTextLabel.Text=VIP\nTextButton.Text=\nTextLabel.Text=Youtuber\nTextButton.Text=\nTextLabel.Text=Device Spoofer\nTextLabel.Text=Service.Players.LocalPlayer.GetAttribute()\nTextButton.Text=\nInitialized settings: {'guard': True, 'magnetStrength': 50, 'guardKey': 'Enum.KeyCode.L', 'ballCheck': True, 'basket': 'Nearest', 'magnet': False, 'aim': True, 'reach': True, 'camera': True, 'collisions': False, 'dribble': True, 'autoPlay': False, 'antiDrop': True, 'jumpMatch': True, 'walkSpeed': 0.01, 'reachStrength': 2}"
+      "output": "PASS: all 18 video-derived scenarios"
     }
-  ]
+  ],
+  "startup": {
+    "suite": "work/test_ultimate_preferences.py",
+    "passed": true,
+    "output": "reconstructed True nil actions 2872"
+  },
+  "note": "Offline Lua 5.5 mocks of Roblox services. Not live Hoopz verification."
 }

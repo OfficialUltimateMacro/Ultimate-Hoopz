@@ -28,7 +28,7 @@ assert(e.DefenseMode~='Adaptive hoop protection' and target,'offensive adaptatio
 local other=F.player(v(200,3,0),'DifferentOpponent');e.MatchOpponent=other;e:SyncRisk();assert(not e.AdaptiveRimOnly,'adaptation is opponent-specific')
 F.own.Character.ball:SetBall(true);root.Position=v(64,3,0);e.OffenseGoal=F.goal;e.ForceShot=true
 e.OpponentReads={{Player=F.enemy,Position=v(65,3,0),Predicted=v(65,3,0),Velocity=v()}}
-assert(not e:CanTakeShot(root),'even timeout cannot force contested shot')
+assert(e:CanTakeShot(root) and e.ShotContested,'contested in-range jumper is allowed (user preference)')
 e.OpponentReads={};assert(e:CanTakeShot(root),'clear shot remains available')
 e.State='Own';e.PreparingShot=false;e.Shooting=false;e.AutoMovePoint=nil;e.Clock=10;e.LastDribble=-100;e.MoveCooldowns={}
 e:ProtectiveIdle();assert(e.LastMove=='R' or e.LastMove=='V' or e.LastMove=='B','waiting still uses protective dribble moves')
@@ -43,6 +43,6 @@ for i=1,2 do e.ShotTrack={Kind='Shot',Released=false};e:FinishShotTrack('Not a r
 assert(not e.AdaptiveRimOnly,'shot-result failures cannot force rim-only')
 for i=1,20 do e:ObserveRisk(third,'turnover') end
 assert(not e.AdaptiveRimOnly,'ordinary turnovers never force strategy')
-return 'PASS: guard lock across key/UI/mobile/external edits, off notice and restoration; opponent-specific adaptation, clear-space shots, hoop protection, protective waiting and safe dunk gating'
+return 'PASS: guard lock across key/UI/mobile/external edits, off notice and restoration; opponent-specific adaptation, contested in-range shots allowed, hoop protection, protective waiting and safe dunk gating'
 '''
 print(run(lua.replace('FIXTURE',fixture).replace('SOURCE','[====['+source+']====]')).decode())

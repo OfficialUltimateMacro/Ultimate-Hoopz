@@ -74,7 +74,19 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     local along = dflat(here-attackerFlat):Dot(direction)
     local mode, spacing
     if self.TurnoverRetreat and (along>3 or rimDistance<10 or self.Clock-(self.TurnoverAt or self.Clock)>2.5) then self.TurnoverRetreat=nil end
-    if self.TurnoverRetreat and along<3 then
+    local camping = self.AdaptiveRimOnly == true
+    if camping and rimDistance > 55 then self.CampFarSince = self.CampFarSince or self.Clock else self.CampFarSince = nil end
+    if camping and rimDistance >= 20 then
+        -- Conditional rim strategy: stay deep on the attacker-rim line and
+        -- react laterally; step up when the attacker lingers far out, and
+        -- use normal rim protection/contests once he comes inside 20 studs.
+        local deep = math.min(9, rimDistance*0.5)
+        if self.CampFarSince and self.Clock-self.CampFarSince > 6 then
+            mode = "Rim strategy: step up"
+            deep = math.min(rimDistance-12, 25)
+        else mode = "Rim strategy: protect hoop" end
+        spacing = math.max(0.5, rimDistance-deep)
+    elseif self.TurnoverRetreat and along<3 then
         mode="Transition: protect hoop"
         spacing=math.max(4,rimDistance-10)
     elseif along < 0.5 then
