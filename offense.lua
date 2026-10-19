@@ -444,7 +444,11 @@ function Extension:ReactiveRoute(root)
     local replacement=self:SteerTo(root,destination,reads)
     self.RerouteCount=(self.RerouteCount or 0)+1
     if replacement then self.AutoMovePoint=replacement;self.AutoPlayStatus="Reactive evasion: changed path"
-    else self:StopAutoMove();self.AutoPlayStatus="Clearance blocked: waiting for a safe exit" end
+    else
+        -- Counts toward the bounded space-reset fallback.
+        self.BlockedSince=self.BlockedSince or self.Clock
+        self:StopAutoMove();self.AutoPlayStatus="Clearance blocked: waiting for a safe exit"
+    end
     if self.Clock>=(self.NextRerouteLog or -100) then
         self.NextRerouteLog=self.Clock+0.5
         self:Log("reroute",tostring(reason).." -> "..(replacement and "alternate path" or "stop; no supported safe exit"))
@@ -456,10 +460,11 @@ function Extension:SteerTo(root, destination, opponents)
     if delta.Magnitude < 0.6 then return nil end
     local length = math.min(8,delta.Magnitude)
     local candidates = {}
+    local spacingWeight = 4
     for _, degrees in ipairs({0,-30,30,-60,60,-90,90,-120,120,-150,150,180}) do
         local point = root.Position+rotate(unit(delta),math.rad(degrees))*length
         local space = self:SpaceAt(point,opponents)
-        local cost = flat(destination-point).Magnitude + math.max(0,14-space)*4
+        local cost = flat(destination-point).Magnitude + math.max(0,14-space)*spacingWeight
         for _, opponent in ipairs(opponents) do
             cost = cost + math.max(0,5-segmentDistance(opponent.Predicted,root.Position,point))*5
         end
@@ -1073,7 +1078,8 @@ function Extension:OffenseStep(character, humanoid, root)
         self:StopAutoMove();self.AutoPlayStatus="Hesitation: reading the defender";return false
     end
     local point = plan and plan.Point or self:SteerTo(root,self.ShotSpot,opponents)
-    if point then self.BlockedSince=nil end
+    -- A point that the per-frame check keeps cancelling is not progress.
+    if point and not (self.BlockedSince and self.Clock-self.BlockedSince < 0.3) then self.BlockedSince=nil end
     if not point then
         point=self:SpaceReset(root,opponents)
         if point then self.AutoMovePoint=point;self.AutoPlayStatus="Space reset: route blocked";return false end

@@ -39,11 +39,18 @@ local function anomaly(gap)
  F.er.Position=v(65,3,0);F.er.AssemblyLinearVelocity=v();hold('loose',v(65-(gap or 25),3,0));tick(20)
  hold('them');tick(20)
 end
+-- 0. A static rack/decor ball on the court must not make every sample ambiguous.
+local rack=F.part(v(30,3,30),'Basketball');rack.Owner=nil;F.world.DescendantAdded:Fire(rack)
+local function hold2(who,at) hold(who,at);F.balls[#F.balls+1]=rack end
+hold2('us');tick(10);F.er.Position=F.root.Position+v(3,0,0);tick(3);hold2('them');tick(10)
+assert(e.PickupEvidence.Normal>=1,'evaluated despite a static rack ball on court')
+local summary=e:EvidenceSummary();assert(summary:find('samples%['),'sampler diagnostics shown')
+e.Clock=e.Clock+6
 -- 1. Normal steals never add evidence (opponent in contact range).
 for i=1,5 do
  hold('us');tick(20);F.er.Position=F.root.Position+v(3,0,0);tick(5);hold('them');tick(20);e.Clock=e.Clock+6
 end
-assert(events()==0 and e.PickupEvidence.Normal>=5 and level()=='none','normal steals are not evidence')
+assert(events()==0 and e.PickupEvidence.Normal>=6 and level()=='none','normal steals are not evidence')
 -- Contested/failed shot then nearby rebound: normal.
 hold('loose',F.er.Position+v(6,0,0));tick(20);hold('them');tick(20)
 assert(events()==0,'nearby rebound is normal')

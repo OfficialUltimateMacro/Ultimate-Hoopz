@@ -37,10 +37,20 @@ function Extension:CourtBallSample()
             end
         end
     end
+    -- Static balls (racks/decor) never move and are never held; only balls
+    -- seen held or moving count as the game ball.
+    local seen = self.BallMotion or setmetatable({}, {__mode="k"})
+    self.BallMotion = seen
     for part in pairs(self:BallSet()) do
-        if part.Parent and not self:BallOwner(part) and self:MatchPosition(part.Position) then
-            count = count+1
-            found = {Position=part.Position, Velocity=part.AssemblyLinearVelocity}
+        if part.Parent then
+            local info = seen[part]
+            if not info then info = {Origin=part.Position}; seen[part] = info end
+            if self:BallOwner(part) then info.Active = true
+            elseif not info.Active and (part.Position-info.Origin).Magnitude > 1 then info.Active = true end
+            if info.Active and not self:BallOwner(part) and self:MatchPosition(part.Position) then
+                count = count+1
+                found = {Position=part.Position, Velocity=part.AssemblyLinearVelocity}
+            end
         end
     end
     if count == 0 then return nil, "no ball on court" end
@@ -67,6 +77,8 @@ function Extension:SamplePickups()
     end
     local history = self.PickupHistory
     local sample, why = self:CourtBallSample()
+    marks.Samples = marks.Samples or {}
+    marks.Samples[why or "ok"] = (marks.Samples[why or "ok"] or 0)+1
     if not sample then
         local last = history[#history]
         if why == "multiple balls on court" then marks.Ambiguous = now
@@ -194,8 +206,11 @@ end
 function Extension:EvidenceSummary()
     local level, score, count, median, age = self:PickupLevel()
     local ev = self.PickupEvidence or {Normal=0}
-    return string.format("%s suspected events=%d score=%.2f median excess=%.1f last=%s normal=%d",
-        level, count, score, median, age and string.format("%.0fs", age) or "-", ev.Normal or 0), level, score, count
+    local samples = {}
+    for reason, n in pairs((self.PickupMarks or {}).Samples or {}) do samples[#samples+1] = reason.."="..n end
+    table.sort(samples)
+    return string.format("%s suspected events=%d score=%.2f median excess=%.1f last=%s normal=%d samples[%s]",
+        level, count, score, median, age and string.format("%.0fs", age) or "-", ev.Normal or 0, table.concat(samples, " ")), level, score, count
 end
 -- Decide normal vs conditional strategy (plan tick, logs only on change).
 function Extension:UpdateRimStrategy()

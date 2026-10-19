@@ -27,9 +27,13 @@ Normal opponents get normal offense and situational defense. A separate, opponen
 - Evidence decays (time constant 120 s, window 300 s), is bounded to 8 events, and resets when the court or opponent changes. Levels: none, suspected (2 independent events, score at least 1.5) and strong (3 events, score at least 2.4, median excess at least 6 studs).
 - **Magnet response** setting: *Manual confirm* (default) prompts once with the evidence and waits for **Confirm suspected opponent**; *Auto (experimental)* activates only at strong evidence and exits when the score falls below 1.0; *Off* never acts. **Rim strategy override** forces the strategy for testing without evidence or accusation, and **Clear rim strategy** resets confirmation and override. A confirmation expires when evidence decays.
 - While active, offense prefers safe drives and dunks (all route and clearance checks still apply). After 2.5 s with a blocked rim lane, a normal in-range jumper is allowed. Defense stays deep on the attacker-rim line (up to 9 studs from the hoop), faces and tracks the attacker laterally, steps up when the attacker lingers beyond 55 studs for 6 s, uses normal rim protection and contests inside 20 studs, and still recovers loose balls and rebounds. Normal turnover recovery is unchanged.
+- Only balls seen held or moving count as the game ball, so static rack/decor balls on a court no longer make every sample ambiguous. Shot status shows sampler counts (`samples[...]`).
 - Limitation: a magnet that physically drags the ball close before pickup looks like a normal pickup and is not detected.
 
 ## Pressure escapes
+
+After a score/reset teleport the controller pauses 0.25 s (was 0.6 s) before playing. A check-ball drill (reset about 99 studs out, defender closing with a 0.25 s reaction delay) is a regression test; this release matches the previous release there and does not claim an improvement in steal avoidance.
+
 
 The four-attempt cap stays removed and the retry interval stays at 0.15 s, with six lateral/backward-diagonal exits. Against a square defender the planner now keeps its previous side instead of alternating. Three side changes within 3 s lock the side for 1.2 s. Exits are scored on end and midpoint clearance against current and predicted positions plus separation gained. After 1.5 s without any safe route, a bounded space reset moves up to 10 studs along the combined push-away direction from nearby defenders, at most every 1.2 s and only on the court. Refused moves and routes are reported in Shot status (`Refused: move ... | route ...`).
 
@@ -51,7 +55,7 @@ The generator writes Ultimate.Blessed.decoded.lua. The release pipeline checks i
 
 ## Validation and limitations
 
-22 packaged offline suites plus a simulated startup check validate this release, bound to the exact generated SHA by work/run_release_tests.py. New suites cover pickup evidence (normal steals, single anomalies, stale/duplicate/reset rejection, decay, manual/auto/off/override, scoping), the rim strategy versus normal play, and escape stability.
+23 packaged offline suites plus a simulated startup check validate this release, bound to the exact generated SHA by work/run_release_tests.py. New suites cover pickup evidence (normal steals, single anomalies, stale/duplicate/reset rejection, decay, manual/auto/off/override, scoping), the rim strategy versus normal play, and escape stability.
 
 Copy Auto-play log exports local bounded events, move counts and tactical samples, including policy, defender gaps, reroutes, power and shot reasons. It does not send telemetry. Tests and engineering documentation use synthetic scenarios; private user media and personal gameplay logs are not included.
 

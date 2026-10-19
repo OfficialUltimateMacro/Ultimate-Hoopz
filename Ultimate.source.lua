@@ -346,7 +346,7 @@ function Extension:UpdateState(character, humanoid, root)
     local last = self.LastRootPosition
     self.LastRootPosition = root.Position
     if last and (root.Position-last).Magnitude > 25 then
-        self.ResetUntil = now+0.6
+        self.ResetUntil = now+0.25 -- brief settle only; the defender is closing during check ball
         self:Log("reset", string.format("teleport %.0f studs (score/reset or respawn)", (root.Position-last).Magnitude))
     end
     local busy = self.Shooting or (self.AimDepth or 0) > 0
@@ -1404,7 +1404,11 @@ function Extension:ReactiveRoute(root)
     local replacement=self:SteerTo(root,destination,reads)
     self.RerouteCount=(self.RerouteCount or 0)+1
     if replacement then self.AutoMovePoint=replacement;self.AutoPlayStatus="Reactive evasion: changed path"
-    else self:StopAutoMove();self.AutoPlayStatus="Clearance blocked: waiting for a safe exit" end
+    else
+        -- Counts toward the bounded space-reset fallback.
+        self.BlockedSince=self.BlockedSince or self.Clock
+        self:StopAutoMove();self.AutoPlayStatus="Clearance blocked: waiting for a safe exit"
+    end
     if self.Clock>=(self.NextRerouteLog or -100) then
         self.NextRerouteLog=self.Clock+0.5
         self:Log("reroute",tostring(reason).." -> "..(replacement and "alternate path" or "stop; no supported safe exit"))
@@ -1416,10 +1420,11 @@ function Extension:SteerTo(root, destination, opponents)
     if delta.Magnitude < 0.6 then return nil end
     local length = math.min(8,delta.Magnitude)
     local candidates = {}
+    local spacingWeight = 4
     for _, degrees in ipairs({0,-30,30,-60,60,-90,90,-120,120,-150,150,180}) do
         local point = root.Position+rotate(unit(delta),math.rad(degrees))*length
         local space = self:SpaceAt(point,opponents)
-        local cost = flat(destination-point).Magnitude + math.max(0,14-space)*4
+        local cost = flat(destination-point).Magnitude + math.max(0,14-space)*spacingWeight
         for _, opponent in ipairs(opponents) do
             cost = cost + math.max(0,5-segmentDistance(opponent.Predicted,root.Position,point))*5
         end
@@ -2033,7 +2038,8 @@ function Extension:OffenseStep(character, humanoid, root)
         self:StopAutoMove();self.AutoPlayStatus="Hesitation: reading the defender";return false
     end
     local point = plan and plan.Point or self:SteerTo(root,self.ShotSpot,opponents)
-    if point then self.BlockedSince=nil end
+    -- A point that the per-frame check keeps cancelling is not progress.
+    if point and not (self.BlockedSince and self.Clock-self.BlockedSince < 0.3) then self.BlockedSince=nil end
     if not point then
         point=self:SpaceReset(root,opponents)
         if point then self.AutoMovePoint=point;self.AutoPlayStatus="Space reset: route blocked";return false end
@@ -2326,10 +2332,20 @@ function Extension:CourtBallSample()
             end
         end
     end
+    -- Static balls (racks/decor) never move and are never held; only balls
+    -- seen held or moving count as the game ball.
+    local seen = self.BallMotion or setmetatable({}, {__mode="k"})
+    self.BallMotion = seen
     for part in pairs(self:BallSet()) do
-        if part.Parent and not self:BallOwner(part) and self:MatchPosition(part.Position) then
-            count = count+1
-            found = {Position=part.Position, Velocity=part.AssemblyLinearVelocity}
+        if part.Parent then
+            local info = seen[part]
+            if not info then info = {Origin=part.Position}; seen[part] = info end
+            if self:BallOwner(part) then info.Active = true
+            elseif not info.Active and (part.Position-info.Origin).Magnitude > 1 then info.Active = true end
+            if info.Active and not self:BallOwner(part) and self:MatchPosition(part.Position) then
+                count = count+1
+                found = {Position=part.Position, Velocity=part.AssemblyLinearVelocity}
+            end
         end
     end
     if count == 0 then return nil, "no ball on court" end
@@ -2356,6 +2372,8 @@ function Extension:SamplePickups()
     end
     local history = self.PickupHistory
     local sample, why = self:CourtBallSample()
+    marks.Samples = marks.Samples or {}
+    marks.Samples[why or "ok"] = (marks.Samples[why or "ok"] or 0)+1
     if not sample then
         local last = history[#history]
         if why == "multiple balls on court" then marks.Ambiguous = now
@@ -2483,8 +2501,11 @@ end
 function Extension:EvidenceSummary()
     local level, score, count, median, age = self:PickupLevel()
     local ev = self.PickupEvidence or {Normal=0}
-    return string.format("%s suspected events=%d score=%.2f median excess=%.1f last=%s normal=%d",
-        level, count, score, median, age and string.format("%.0fs", age) or "-", ev.Normal or 0), level, score, count
+    local samples = {}
+    for reason, n in pairs((self.PickupMarks or {}).Samples or {}) do samples[#samples+1] = reason.."="..n end
+    table.sort(samples)
+    return string.format("%s suspected events=%d score=%.2f median excess=%.1f last=%s normal=%d samples[%s]",
+        level, count, score, median, age and string.format("%.0fs", age) or "-", ev.Normal or 0, table.concat(samples, " ")), level, score, count
 end
 -- Decide normal vs conditional strategy (plan tick, logs only on change).
 function Extension:UpdateRimStrategy()

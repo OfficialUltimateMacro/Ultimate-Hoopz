@@ -242,7 +242,7 @@ function Extension:UpdateState(character, humanoid, root)
     local last = self.LastRootPosition
     self.LastRootPosition = root.Position
     if last and (root.Position-last).Magnitude > 25 then
-        self.ResetUntil = now+0.6
+        self.ResetUntil = now+0.25 -- brief settle only; the defender is closing during check ball
         self:Log("reset", string.format("teleport %.0f studs (score/reset or respawn)", (root.Position-last).Magnitude))
     end
     local busy = self.Shooting or (self.AimDepth or 0) > 0
