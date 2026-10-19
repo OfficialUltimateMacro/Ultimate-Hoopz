@@ -150,11 +150,16 @@ function Extension:CaptureTrace()
     if not root then return end
     local goal=self.OffenseGoal or self.MatchGoal
     local power="?";pcall(function()power=tostring(self.Player:GetAttribute("Power"))end)
+    local gap,predGap=999,999
+    for _,read in ipairs(self.OpponentReads or {})do
+        gap=math.min(gap,distance(root.Position,read.Position));predGap=math.min(predGap,distance(root.Position,read.Predicted))
+    end
     local row=string.format("run="..tostring(self.RunSerial or 0).." T+%.2f state=%s pos=(%.1f,%.1f,%.1f) speed=%.1f rim=%.1f power=%s shield=%s setup=%s move=%s route=%s shot=%s",
         self.Clock-(self.AutoPlayStarted or 0),tostring(self.State),root.Position.X,root.Position.Y,root.Position.Z,
         root.AssemblyLinearVelocity.Magnitude,goal and distance(root.Position,goal.Position) or -1,power,
         tostring(self.ProtectFacing==true),tostring(self.PreparingShot==true),tostring(self.DribbleStatus).." spacing="..tostring(self.SpacingReason or "-"),
         tostring(self.AutoPlayStatus),tostring(self.ShotBlockReason))
+    row=row..string.format(" gap=%.1f predictedGap=%.1f reroutes=%d retreat=%s",gap,predGap,self.RerouteCount or 0,tostring(self.TurnoverRetreat==true))
     self.TraceLog=self.TraceLog or {};table.insert(self.TraceLog,row)
     if #self.TraceLog>120 then table.remove(self.TraceLog,1) end
 end
@@ -334,7 +339,9 @@ function Extension:UpdateState(character, humanoid, root)
     else
         local raw, who = self:ReadPossession(character)
         local committed = self.State
-        if raw == committed or committed == nil or committed == "Manual" or committed == "Reset" or committed == "Shot" or committed == "Off" then
+        if raw=="Opponent" and committed=="Own" then
+            state,holder=raw,who;self.PendingState=nil
+        elseif raw == committed or committed == nil or committed == "Manual" or committed == "Reset" or committed == "Shot" or committed == "Off" then
             state, holder = raw, who
             self.PendingState = nil
         else
@@ -353,6 +360,12 @@ function Extension:UpdateState(character, humanoid, root)
         self:Log("state", tostring(self.State).." -> "..state.." ("..tostring(reason)..")")
         self.LastTransition = tostring(self.State).."->"..state.." ("..tostring(reason)..")"
         local was = self.State
+        if state=="Opponent" and (was=="Own" or was=="Shot" or was=="Loose") then
+            self.TurnoverRetreat=true;self.TurnoverAt=now
+            self:ReleaseDribbleKeys(true)
+            self:Log("turnover","confirmed holder "..tostring(holder and holder.Name).."; retreat to hoop")
+        end
+        if state=="Own" then self.TurnoverRetreat=nil end
         self.State, self.StateSince = state, now
         if was == "Own" and state ~= "Shot" and self.ResetOffense then self:ResetOffense() end
         if state ~= "Opponent" then self.DefenseGoal, self.LastDefenseTarget, self.DefenseFacing = nil, nil, nil end
@@ -623,6 +636,14 @@ function Extension:Install(environment, settings)
             if (action == "Shooting" or action == "Dunking") and not self.FreezeLogged then
                 self:StopAutoMove()
             elseif humanoid and not self.Shooting then
+                local owned=heldBall(character)
+                if not owned and self.State=="Own" then
+                    self:StopAutoMove();self:ReleaseDribbleKeys(true);return
+                end
+                if owned and self.Environment.Vector3 then
+                    self:ReactiveRoute(root)
+                    if not self.AutoMovePoint then return end
+                end
                 -- Re-issue MoveTo only when the target meaningfully changes
                 -- (or to refresh Roblox's 8 s MoveTo timeout).
                 local last = self.LastMoveToPoint
@@ -813,6 +834,10 @@ customizeClosure = function(name, original, environment, captures)
     elseif name == "root.106" then
         Extension.AimAction = original
         return function(...)
+            if Extension.Settings and Extension.Settings.AutoPlay
+                and not heldBall(Extension.Player and Extension.Player.Character) then
+                return -- Defensive contest jumps must not start an aim routine.
+            end
             -- Let the normal JumpRequest path keep its original ShotDelay timing.
             -- Claim once; the queued fallback must not issue a duplicate shot.
             if Extension.Shooting and Extension.Settings and Extension.Settings.AutoPlay then
@@ -1250,6 +1275,24 @@ function Extension:PossessionPathClear(root,point,opponents)
     self.SpacingReason="clearance route accepted"
     return true
 end
+function Extension:ReactiveRoute(root)
+    if not self.AutoMovePoint or self.DunkMode or self.PreparingShot or self.Shooting then return end
+    if self.Clock<(self.NextReactiveScan or -100) then return end
+    self.NextReactiveScan=self.Clock+0.05
+    local reads=self:ReadOpponents(root);self.OpponentReads=reads
+    if self:PossessionPathClear(root,self.AutoMovePoint,reads) then return end
+    local reason=self.SpacingReason
+    local destination=self.ShotSpot or self.AutoMovePoint
+    self.Plan,self.RouteHoldUntil,self.RouteDirection=nil,nil,nil
+    local replacement=self:SteerTo(root,destination,reads)
+    self.RerouteCount=(self.RerouteCount or 0)+1
+    if replacement then self.AutoMovePoint=replacement;self.AutoPlayStatus="Reactive evasion: changed path"
+    else self:StopAutoMove();self.AutoPlayStatus="Clearance blocked: waiting for a safe exit" end
+    if self.Clock>=(self.NextRerouteLog or -100) then
+        self.NextRerouteLog=self.Clock+0.5
+        self:Log("reroute",tostring(reason).." -> "..(replacement and "alternate path" or "stop; no supported safe exit"))
+    end
+end
 function Extension:SteerTo(root, destination, opponents)
     local params = self:MakeRayParams()
     local delta = flat(destination-root.Position)
@@ -1504,13 +1547,14 @@ function Extension:ChooseDribble(root, point, opponents, ball)
         or self.Clock<(self.DribbleDecisionUntil or -100) then return end
     local threat,nearest=nil,16
     for _,opponent in ipairs(opponents)do
-        local d=flat(opponent.Predicted-root.Position).Magnitude
+        local d=math.min(flat(opponent.Position-root.Position).Magnitude,flat(opponent.Predicted-root.Position).Magnitude)
         if d<nearest then threat,nearest=opponent,d end
     end
     local right=root.CFrame.RightVector
     local handPart=ballPart(ball)
     local hand=handPart and flat(handPart.Position-root.Position):Dot(right) or 0
-    local threatSide=threat and flat(threat.Predicted-root.Position):Dot(right) or 0
+    local threatPosition=threat and ((flat(threat.Position-root.Position).Magnitude<flat(threat.Predicted-root.Position).Magnitude) and threat.Position or threat.Predicted)
+    local threatSide=threatPosition and flat(threatPosition-root.Position):Dot(right) or 0
     local routeSide=flat(point-root.Position):Dot(right)
     -- Protect the opposite hand from the defender. Do not cross toward a
     -- steal threat just to keep producing keys; open lanes need no move.
@@ -2098,7 +2142,11 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     -- How far along the attacker->rim axis we are; <= 0.5 means level/behind.
     local along = dflat(here-attackerFlat):Dot(direction)
     local mode, spacing
-    if along < 0.5 and gap < 20 then
+    if self.TurnoverRetreat and (along>3 or rimDistance<10) then self.TurnoverRetreat=nil end
+    if self.TurnoverRetreat and along<3 then
+        mode="Transition: protect hoop"
+        spacing=math.max(4,rimDistance-10)
+    elseif along < 0.5 then
         mode = "Recover"
         spacing = math.min(rimDistance*0.6, 9)
         -- Beaten on a drive close to the basket: sprint to the rim itself
@@ -2117,9 +2165,11 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     spacing = math.min(spacing, math.max(0.5, rimDistance-1))
     local target = attackerFlat+direction*spacing
     -- Recover around the attacker, not through him.
-    if mode == "Recover" and dsegment(attackerFlat, here, target) < 2.5 then
+    if (mode == "Recover" or mode=="Transition: protect hoop") and dsegment(attackerFlat, here, target) < 2.5 then
         local side = dflat(here-attackerFlat):Dot(lateral) >= 0 and 1 or -1
-        target = attackerFlat+lateral*side*4+direction*2
+        if mode=="Transition: protect hoop" then
+            target=target+lateral*side*6
+        else target = attackerFlat+lateral*side*4+direction*2 end
     end
     -- Never drift farther from the basket than the attacker (out of bounds /
     -- onto another court), and keep on supported floor.

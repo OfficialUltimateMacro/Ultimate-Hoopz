@@ -73,7 +73,11 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     -- How far along the attacker->rim axis we are; <= 0.5 means level/behind.
     local along = dflat(here-attackerFlat):Dot(direction)
     local mode, spacing
-    if along < 0.5 and gap < 20 then
+    if self.TurnoverRetreat and (along>3 or rimDistance<10) then self.TurnoverRetreat=nil end
+    if self.TurnoverRetreat and along<3 then
+        mode="Transition: protect hoop"
+        spacing=math.max(4,rimDistance-10)
+    elseif along < 0.5 then
         mode = "Recover"
         spacing = math.min(rimDistance*0.6, 9)
         -- Beaten on a drive close to the basket: sprint to the rim itself
@@ -92,9 +96,11 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     spacing = math.min(spacing, math.max(0.5, rimDistance-1))
     local target = attackerFlat+direction*spacing
     -- Recover around the attacker, not through him.
-    if mode == "Recover" and dsegment(attackerFlat, here, target) < 2.5 then
+    if (mode == "Recover" or mode=="Transition: protect hoop") and dsegment(attackerFlat, here, target) < 2.5 then
         local side = dflat(here-attackerFlat):Dot(lateral) >= 0 and 1 or -1
-        target = attackerFlat+lateral*side*4+direction*2
+        if mode=="Transition: protect hoop" then
+            target=target+lateral*side*6
+        else target = attackerFlat+lateral*side*4+direction*2 end
     end
     -- Never drift farther from the basket than the attacker (out of bounds /
     -- onto another court), and keep on supported floor.

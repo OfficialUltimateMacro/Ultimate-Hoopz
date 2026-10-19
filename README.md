@@ -1,3 +1,17 @@
+Reactive routes and turnover defense update (2026-10-18)
+
+Read user b55116f5 log: repeated routing turnovers plus manual A/D pauses; no runtime errors. Defender coordinates were absent, so actual live contact cannot be reconstructed from this log. Added current/predicted nearest defender gaps and reroute/retreat state to existing bounded tactical traces.
+
+New ReactiveRoute checks movement waypoint clearance on the render path at a bounded0.05s cadence. Unsafe commitments and route hysteresis are cancelled; choose a new supported/court-bounded exit or stop when none exists. Existing defensive safety buffer still heuristic and cannot prevent an independently moving opponent from contacting us. Dribble decisions now use the nearer of current/predicted threat positions, avoiding a full move pool simply because predicted position looks distant.
+
+Loss handling: render stops an offensive waypoint immediately if ball is absent while State still Own. A confirmed court-scoped opposing holder bypasses the normal Own->Opponent debounce, cancels held dribble keys, and sets TurnoverRetreat. Defense targets a position near the hoop until basket-side control is recovered, instead of following close behind a stolen-ball handler; Recover also applies to beaten defenders at larger gaps. Manual input remains authoritative.
+
+Fixed native root.106 wrapper: under Auto-play, an off-ball defensive contest jump no longer starts an aim routine/AimDepth or puts defense into Shot. Own-ball and manual non-Auto-play shooting remain available.
+
+New test_reactive_turnover verifies changing blocker/alternate path, immediate stale offensive movement cancellation, confirmed turnover priority, near-hoop recovery target, defensive aim suppression and trace fields.17 offline packaged suites plus startup bind to current build. Performance budget intentionally allows up to250 MoveTo calls/10s during reactive pressure (previously150); observed ~208 in the fake shadow scenario, below frame-rate writes; player/goal caches and ray budgets remain checked. Fake CPU timing does not establish live lag.
+
+---
+
 Default preferences update (2026-10-18): Ball Magnet remains off at startup; Ball Reach remains enabled with Reach Strength now2, previously10. Auto-play still applies its existing temporary feature toggles while enabled and restores them afterward. Other defaults unchanged.
 
 Defender-clearance and tempo update (2026-10-18)

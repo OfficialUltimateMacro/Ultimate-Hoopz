@@ -392,6 +392,24 @@ function Extension:PossessionPathClear(root,point,opponents)
     self.SpacingReason="clearance route accepted"
     return true
 end
+function Extension:ReactiveRoute(root)
+    if not self.AutoMovePoint or self.DunkMode or self.PreparingShot or self.Shooting then return end
+    if self.Clock<(self.NextReactiveScan or -100) then return end
+    self.NextReactiveScan=self.Clock+0.05
+    local reads=self:ReadOpponents(root);self.OpponentReads=reads
+    if self:PossessionPathClear(root,self.AutoMovePoint,reads) then return end
+    local reason=self.SpacingReason
+    local destination=self.ShotSpot or self.AutoMovePoint
+    self.Plan,self.RouteHoldUntil,self.RouteDirection=nil,nil,nil
+    local replacement=self:SteerTo(root,destination,reads)
+    self.RerouteCount=(self.RerouteCount or 0)+1
+    if replacement then self.AutoMovePoint=replacement;self.AutoPlayStatus="Reactive evasion: changed path"
+    else self:StopAutoMove();self.AutoPlayStatus="Clearance blocked: waiting for a safe exit" end
+    if self.Clock>=(self.NextRerouteLog or -100) then
+        self.NextRerouteLog=self.Clock+0.5
+        self:Log("reroute",tostring(reason).." -> "..(replacement and "alternate path" or "stop; no supported safe exit"))
+    end
+end
 function Extension:SteerTo(root, destination, opponents)
     local params = self:MakeRayParams()
     local delta = flat(destination-root.Position)
@@ -646,13 +664,14 @@ function Extension:ChooseDribble(root, point, opponents, ball)
         or self.Clock<(self.DribbleDecisionUntil or -100) then return end
     local threat,nearest=nil,16
     for _,opponent in ipairs(opponents)do
-        local d=flat(opponent.Predicted-root.Position).Magnitude
+        local d=math.min(flat(opponent.Position-root.Position).Magnitude,flat(opponent.Predicted-root.Position).Magnitude)
         if d<nearest then threat,nearest=opponent,d end
     end
     local right=root.CFrame.RightVector
     local handPart=ballPart(ball)
     local hand=handPart and flat(handPart.Position-root.Position):Dot(right) or 0
-    local threatSide=threat and flat(threat.Predicted-root.Position):Dot(right) or 0
+    local threatPosition=threat and ((flat(threat.Position-root.Position).Magnitude<flat(threat.Predicted-root.Position).Magnitude) and threat.Position or threat.Predicted)
+    local threatSide=threatPosition and flat(threatPosition-root.Position):Dot(right) or 0
     local routeSide=flat(point-root.Position):Dot(right)
     -- Protect the opposite hand from the defender. Do not cross toward a
     -- steal threat just to keep producing keys; open lanes need no move.

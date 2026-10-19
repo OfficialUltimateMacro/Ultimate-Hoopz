@@ -46,11 +46,16 @@ function Extension:CaptureTrace()
     if not root then return end
     local goal=self.OffenseGoal or self.MatchGoal
     local power="?";pcall(function()power=tostring(self.Player:GetAttribute("Power"))end)
+    local gap,predGap=999,999
+    for _,read in ipairs(self.OpponentReads or {})do
+        gap=math.min(gap,distance(root.Position,read.Position));predGap=math.min(predGap,distance(root.Position,read.Predicted))
+    end
     local row=string.format("run="..tostring(self.RunSerial or 0).." T+%.2f state=%s pos=(%.1f,%.1f,%.1f) speed=%.1f rim=%.1f power=%s shield=%s setup=%s move=%s route=%s shot=%s",
         self.Clock-(self.AutoPlayStarted or 0),tostring(self.State),root.Position.X,root.Position.Y,root.Position.Z,
         root.AssemblyLinearVelocity.Magnitude,goal and distance(root.Position,goal.Position) or -1,power,
         tostring(self.ProtectFacing==true),tostring(self.PreparingShot==true),tostring(self.DribbleStatus).." spacing="..tostring(self.SpacingReason or "-"),
         tostring(self.AutoPlayStatus),tostring(self.ShotBlockReason))
+    row=row..string.format(" gap=%.1f predictedGap=%.1f reroutes=%d retreat=%s",gap,predGap,self.RerouteCount or 0,tostring(self.TurnoverRetreat==true))
     self.TraceLog=self.TraceLog or {};table.insert(self.TraceLog,row)
     if #self.TraceLog>120 then table.remove(self.TraceLog,1) end
 end
@@ -230,7 +235,9 @@ function Extension:UpdateState(character, humanoid, root)
     else
         local raw, who = self:ReadPossession(character)
         local committed = self.State
-        if raw == committed or committed == nil or committed == "Manual" or committed == "Reset" or committed == "Shot" or committed == "Off" then
+        if raw=="Opponent" and committed=="Own" then
+            state,holder=raw,who;self.PendingState=nil
+        elseif raw == committed or committed == nil or committed == "Manual" or committed == "Reset" or committed == "Shot" or committed == "Off" then
             state, holder = raw, who
             self.PendingState = nil
         else
@@ -249,6 +256,12 @@ function Extension:UpdateState(character, humanoid, root)
         self:Log("state", tostring(self.State).." -> "..state.." ("..tostring(reason)..")")
         self.LastTransition = tostring(self.State).."->"..state.." ("..tostring(reason)..")"
         local was = self.State
+        if state=="Opponent" and (was=="Own" or was=="Shot" or was=="Loose") then
+            self.TurnoverRetreat=true;self.TurnoverAt=now
+            self:ReleaseDribbleKeys(true)
+            self:Log("turnover","confirmed holder "..tostring(holder and holder.Name).."; retreat to hoop")
+        end
+        if state=="Own" then self.TurnoverRetreat=nil end
         self.State, self.StateSince = state, now
         if was == "Own" and state ~= "Shot" and self.ResetOffense then self:ResetOffense() end
         if state ~= "Opponent" then self.DefenseGoal, self.LastDefenseTarget, self.DefenseFacing = nil, nil, nil end
@@ -519,6 +532,14 @@ function Extension:Install(environment, settings)
             if (action == "Shooting" or action == "Dunking") and not self.FreezeLogged then
                 self:StopAutoMove()
             elseif humanoid and not self.Shooting then
+                local owned=heldBall(character)
+                if not owned and self.State=="Own" then
+                    self:StopAutoMove();self:ReleaseDribbleKeys(true);return
+                end
+                if owned and self.Environment.Vector3 then
+                    self:ReactiveRoute(root)
+                    if not self.AutoMovePoint then return end
+                end
                 -- Re-issue MoveTo only when the target meaningfully changes
                 -- (or to refresh Roblox's 8 s MoveTo timeout).
                 local last = self.LastMoveToPoint
@@ -709,6 +730,10 @@ customizeClosure = function(name, original, environment, captures)
     elseif name == "root.106" then
         Extension.AimAction = original
         return function(...)
+            if Extension.Settings and Extension.Settings.AutoPlay
+                and not heldBall(Extension.Player and Extension.Player.Character) then
+                return -- Defensive contest jumps must not start an aim routine.
+            end
             -- Let the normal JumpRequest path keep its original ShotDelay timing.
             -- Claim once; the queued fallback must not issue a duplicate shot.
             if Extension.Shooting and Extension.Settings and Extension.Settings.AutoPlay then
