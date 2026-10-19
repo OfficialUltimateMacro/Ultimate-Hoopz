@@ -1,3 +1,17 @@
+Aggressive possession shielding and diagnostics (2026-10-18)
+
+Latest user preference overrides prior open-lane restraint: randomized chains now continue during moving possession, including open lanes, at a0.10s decision floor. Nearby defenders restrict candidates to protective transfers/fakes; open lanes allow C/H/F/G/R/V/B. Avoid immediate duplicate moves; per-move cooldowns, active actions, manual control and shot/dunk ownership still apply. At contact an exposed-hand transfer gets priority, with wait as fallback when unavailable rather than an unsafe random crossover. This is not a promise of uninterrupted input or immunity to steals.
+
+Shield starts whenever the local character holds the ball, before a debounced Own transition or route exists; stationary possession shields too. Camera faces away from the nearest court-scoped opponent; absent a read it uses an away-from-rim fallback until shot setup/dunk. Native shift-lock remains required for camera-driven body turning (manual enable if automatic controller unavailable). Shot setup explicitly disables shielding. Camera turns remain eased, not instant physical root rotation.
+
+Shot settling reduced from0.12+0.12s to0.06+0.06s; pump fake bounded at0.25s instead of0.45; early sweet-spot adjustment limited to first0.5s. High arc and0.28 delay unchanged. The known1.25s retry interval is retained so retries cannot overwrite one-second release confirmation. No live accuracy improvement is established; native High power/arc tables remain unchanged.
+
+Copy Auto-play log now includes per-key move counts and latest60s of0.5s tactical samples (120 bounded rows): position, speed, goal distance, Power, shield/setup flags, route, dribble reason, shot block reason and state. Events carry run ID and sequence, attempt logs capture arc/power/delay/goal, and Off diagnostics reset state age/holder/shield flags. Events remain capped60. No network telemetry.
+
+New test_aggressive_autoplay verifies possession-first stationary shielding, protective fallback, rapid variety without immediate repeat, sub0.12s open-shot readiness and trace/session bounds. Updated older tests reflect the latest randomized-chain preference.15 offline suites plus startup pass, bound to exact build hash. Live gameplay still unverified; avoid promising no steals/perfect shots.
+
+---
+
 High arc and possession-protection update (2026-10-18)
 
 High is now the startup AimbotType; Mixed arc and Low remain selectable. Shot Delay remains0.28. Dribbling no longer uses the random move fallback. ChooseDribble transfers an exposed hand away from a nearby defender, preserves an already protected hand, waits when a safe input is on cooldown, avoids open-lane input spam, and commits decisions for0.24s. R is reserved for closing pressure before contact. Shooting/Dunking actions always block dribble inputs.

@@ -92,7 +92,7 @@ world.Raycast=raycast
 -- Screenshot key mapping remains available; tactical ball-protection policy
 -- is covered by test_ball_protection, rather than requiring random moves.
 for i,name in ipairs({'F','G','R','V','C','B','H'})do
- e:ReleaseDribbleKeys(true);e.Clock=3+i;e.MoveCooldowns={}
+ e:ReleaseDribbleKeys(true);e.Clock=3+i;e.MoveCooldowns={};e.LastDribble=-100
  assert(e:PulseDribble(name),'supported control '..name)
  assert(keys[#keys][1] and keys[#keys][2]==name,'mapped key '..name)
  e:ReleaseDribbleKeys(true);assert(not keys[#keys][1] and keys[#keys][2]==name,'release '..name)
@@ -104,10 +104,10 @@ e.Clock=20;e.MoveCooldowns={};e.LastDribble=-100;e:ReleaseDribbleKeys(true)
 er.Position=root.Position+v(-10,0,0);er.AssemblyLinearVelocity=v();eh.FloorMaterial='Ground'
 local before=#keys
 e:ChooseDribble(root,root.Position+v(0,0,8),e:ReadOpponents(root),own.Character.ball)
-assert(#keys==before,'stationary defender does not cause automatic R spam')
+assert(#keys>before,'stationary pressure still gets a randomized chain')
 e.Clock=21;e.OpponentMemory=nil;er.Position=root.Position+v(-15,0,0);er.AssemblyLinearVelocity=v(14,0,0)
 e:ChooseDribble(root,root.Position+v(-8,0,0),e:ReadOpponents(root),own.Character.ball)
-assert(keys[#keys][2]=='R' and keys[#keys][1],'R responds to closing pressure before contact')
+assert(keys[#keys][1] and (keys[#keys][2]=='R' or keys[#keys][2]=='V' or keys[#keys][2]=='B'),'closing pressure uses safe randomized chain')
 e:ReleaseDribbleKeys(true)
 -- Disabling between queueing and execution must prevent a shot.
 er.Position=v(200,3,200);root.Position=spot;e:ResetOffense();e.Clock=12;e:AutoPlayStep(own.Character,oh,root);e.Clock=12.3

@@ -124,6 +124,7 @@ function Extension:ResetOffense()
     self.DunkMode, self.DriveUntil, self.DunkingUntil = nil, nil, nil
     self.Plan, self.EscapeCount, self.NextEscape, self.PossessionStart = nil, 0, nil, nil
     self.DribbleDecisionUntil=nil
+    self.PreparingShot=false
     self.FakeShotStart, self.ForceShot, self.AttackMode = nil, nil, nil
     self.FreezeSince, self.FreezeLogged = nil, nil
 end
@@ -194,6 +195,7 @@ function Extension:PulseKey(name, hold, cooldown, force)
     local ok = pcall(self.VirtualInput.SendKeyEvent,self.VirtualInput,true,key,false,self.Environment.game)
     if not ok then self:ReleaseDribbleKeys(true);self.DribbleStatus="Input unavailable";return false end
     self.LastDribble,self.DribbleStatus,self.LastMove = self.Clock,name,name
+    self.MoveCounts=self.MoveCounts or {};self.MoveCounts[name]=(self.MoveCounts[name] or 0)+1
     self.MoveCooldowns[name] = self.Clock
     -- Release independently of the planner too, even if its heartbeat stops.
     self.Environment.task.delay(hold+0.005,function()
@@ -513,20 +515,19 @@ function Extension:DesiredFacing(root)
     local move=self.AutoMovePoint and flat(self.AutoMovePoint-root.Position)
     local moveDir=move and move.Magnitude>0.6 and unit(move)
     self.ProtectFacing=false
-    if self.State=="Opponent" then return self.DefenseFacing end
-    if moveDir and self.Settings.AutoPlayDribble and not self.DunkMode
-        and (not toGoal or toGoal.Magnitude>16) then
-        local threat,nearest=nil,12
+    local owns=heldBall(self.Player and self.Player.Character)
+    if self.State=="Opponent" and not owns then return self.DefenseFacing end
+    if owns and self.Settings.AutoPlayDribble and not self.DunkMode and not self.PreparingShot then
+        local threat,nearest=nil,90
         for _,opponent in ipairs(self.OpponentReads or {})do
             local offset=flat(root.Position-opponent.Predicted)
             local d=offset.Magnitude
             if d>0.1 and d<nearest then threat,nearest=offset,d end
         end
-        if threat then
+        local away=threat and unit(threat) or (goalDir and goalDir*(-1))
+        if away then
             self.ProtectFacing=true
-            -- Shift-lock turns our front away, keeping our back between the
-            -- defender and the ball. Movement remains controlled by the route.
-            return unit(unit(threat)*0.9+moveDir*0.1)
+            return unit(away*0.95+(moveDir or away)*0.05)
         end
     end
     local plan=self.Plan
@@ -545,8 +546,11 @@ function Extension:UpdateAutoFacing(dt)
     if not env or not env.CFrame or not self.Alive or not self.Settings.AutoPlay or not self.Settings.AutoPlayCamera
         or self.Shooting or (self.AimDepth or 0)>0 or self:IsManual() then self:ReleaseAutoFacing();return end
     local character,humanoid,root=characterParts(self.Player)
-    local defending=self.State=="Opponent" and self.DefenseFacing~=nil
-    local offense=(self.State=="Own" or self.State==nil) and heldBall(character)
+    local offense=heldBall(character)
+    local defending=not offense and self.State=="Opponent" and self.DefenseFacing~=nil
+    if offense and self.Clock-(self.LastShieldRead or -100)>=0.05 then
+        self.OpponentReads=self:ReadOpponents(root);self.LastShieldRead=self.Clock
+    end
     if not humanoid or not (offense or defending) then self:ReleaseAutoFacing();return end
     local action=gameAction(character)
     if action=="Shooting" or action=="Dunking" then self:ReleaseAutoFacing();return end
@@ -618,41 +622,42 @@ end
 -- Dribble choice. Reactive picks plus coordinated escape moves.
 ---------------------------------------------------------------------------
 function Extension:ChooseDribble(root, point, opponents, ball)
-    if not point or not ball or (self.Plan and self.Clock < self.Plan.Until)
+    if not point or not ball or (self.Plan and self.Plan.Kind=="hesitate" and self.Clock < self.Plan.Until)
         or self.Clock<(self.DribbleDecisionUntil or -100) then return end
     local threat,nearest=nil,16
     for _,opponent in ipairs(opponents)do
         local d=flat(opponent.Predicted-root.Position).Magnitude
         if d<nearest then threat,nearest=opponent,d end
     end
-    if not threat then self.DribbleStatus="Open lane: keep possession";return end
     local right=root.CFrame.RightVector
     local handPart=ballPart(ball)
     local hand=handPart and flat(handPart.Position-root.Position):Dot(right) or 0
-    local threatSide=flat(threat.Predicted-root.Position):Dot(right)
+    local threatSide=threat and flat(threat.Predicted-root.Position):Dot(right) or 0
     local routeSide=flat(point-root.Position):Dot(right)
     -- Protect the opposite hand from the defender. Do not cross toward a
     -- steal threat just to keep producing keys; open lanes need no move.
     local safeSide=threatSide>0.6 and -1 or (threatSide< -0.6 and 1 or (routeSide>=0 and 1 or -1))
     local exposed=hand*threatSide>0.15
-    local direction=unit(flat(point-root.Position))
-    local toward=unit(flat(threat.Predicted-root.Position)):Dot(direction)
-    if not exposed and nearest<7 and routeSide*safeSide< -0.5 then
-        self.DribbleStatus="Protecting ball: wait for escape route";return
+    local candidates={}
+    local function add(name) if name~=self.LastMove then candidates[#candidates+1]=name end end
+    if exposed and math.abs(hand)>0.2 then
+        add(safeSide>0 and "F" or "G") -- safe transfer gets first chance
+    else
+        -- Random fast chains preserve the protected hand rather than using
+        -- a blind crossover or hand switch into the defender.
+        add("R");add("V");add("B")
+        if not threat then add("C");add("H");add("F");add("G") end
+        for i=#candidates,2,-1 do local j=math.random(i);candidates[i],candidates[j]=candidates[j],candidates[i] end
     end
-    local move
-    if nearest<9 and (exposed or toward>0.5) then
-        if math.abs(hand)>0.2 and hand*safeSide<0 then move=safeSide>0 and "F" or "G"
-        elseif exposed then move="C" end
-    elseif nearest>=9 and toward>0.5 then
-        -- A fake is useful before contact, not on every close-range frame.
-        local closing=-flat(threat.Position-root.Position):Dot(threat.Velocity)/math.max(nearest,0.1)
-        if closing>8 then move="R" end
+    for _,move in ipairs(candidates)do
+        if self:PulseDribble(move) then
+            self.DribbleDecisionUntil=self.Clock+0.1
+            self.DribbleStatus="Chain "..move.." | protect "..(safeSide>0 and "right" or "left")
+            return
+        end
     end
-    if move and self:PulseDribble(move) then
-        self.DribbleDecisionUntil=self.Clock+0.24
-        self.DribbleStatus="Protect "..(safeSide>0 and "right" or "left")..": "..move
-    end
+    self.DribbleStatus="Chain waiting: safe moves busy or action in progress"
+
 end
 -- Move that carries the ball to the escape side: behind-the-back from the
 -- off hand, a cross when already on that side, or a fake toward the other
@@ -764,6 +769,7 @@ function Extension:OffenseStep(character, humanoid, root)
     if self.Shooting then self:StopAutoMove();return false end
     if self.OffenseCharacter ~= character then self:ResetOffense();self.OffenseCharacter=character end
     local now = self.Clock
+    self.PreparingShot=false
     self.PossessionStart = self.PossessionStart or now
     local held = now-self.PossessionStart
     local action = gameAction(character)
@@ -833,10 +839,11 @@ function Extension:OffenseStep(character, humanoid, root)
         -- into the middle of the calibrated power table.
         local high = self.Settings.AimbotType == "High"
         local low, top = high and 59 or 60, high and 71 or 72
-        if not contested and held < 3 and (rimDistance < low or rimDistance > top) and self.ShotSpot then
+        if not contested and held < 0.5 and (rimDistance < low or rimDistance > top) and self.ShotSpot then
             local point = self:SteerTo(root,self.ShotSpot,opponents)
             if point then self.AutoMovePoint=point;self.AutoPlayStatus="Stepping into the sweet spot";return false end
         end
+        self.PreparingShot=true
         self:StopAutoMove();self:ReleaseDribbleKeys(true)
         self.Plan = nil
         -- Pump fake: a defender already in the air close by will come down
@@ -847,7 +854,7 @@ function Extension:OffenseStep(character, humanoid, root)
         end
         if blocker then
             self.FakeShotStart = self.FakeShotStart or now
-            if now-self.FakeShotStart < 0.45 then
+            if now-self.FakeShotStart < 0.25 then
                 if now-self.FakeShotStart < 0.05 then self:PulseKey("R",0.04,0.4,true) end
                 self.AutoPlayStatus="Pump fake: defender in the air";return false
             end
@@ -857,11 +864,11 @@ function Extension:OffenseStep(character, humanoid, root)
             self.SettlePosition,self.SettleSince=root.Position,now
         end
         local stationary = flat(root.AssemblyLinearVelocity).Magnitude < 3
-            or now-(self.SettleSince or now)>=0.12
+            or now-(self.SettleSince or now)>=0.06
         if not stationary then self.AutoPlayStatus="Stopping for shot";return false end
         self.OpenSince = self.OpenSince or now
         self.AutoPlayStatus="Open shot: settling"
-        if now-self.OpenSince >= 0.12 then self.FakeShotStart=nil;return true end
+        if now-self.OpenSince >= 0.06 then self.FakeShotStart=nil;return true end
         return false
     end
     self.OpenSince=nil
@@ -905,6 +912,10 @@ end
 -- Hoopz Action attribute, ball leaving the hand, closest ball-to-rim pass.
 ---------------------------------------------------------------------------
 function Extension:StartShotTrack(kind, character, goal, reach)
+    self.AttemptSerial=(self.AttemptSerial or 0)+1
+    local power="?";pcall(function()power=tostring(self.Player:GetAttribute("Power"))end)
+    self:Log("attempt",string.format("#%d %s routine completed | arc=%s power=%s delay=%s goal=%s",
+        self.AttemptSerial,kind,tostring(self.Settings.AimbotType),power,tostring(self.Settings.ShotDelay),self:GoalLabel(goal)))
     self.ShotTrack = {Kind=kind, Character=character, Goal=goal, Start=self.Clock, Reach=reach,
         Released=false, MinDistance=math.huge, Ball=self.PossessionBall}
 end

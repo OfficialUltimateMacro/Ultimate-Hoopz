@@ -35,8 +35,24 @@ function Extension:Log(kind, text)
     local stamp = string.format("T+%.1f", self.Clock-(self.AutoPlayStarted or 0))
     local okDate, wall = pcall(function() return os.date("%H:%M:%S") end)
     if okDate and wall then stamp = wall.." "..stamp end
-    log[#log+1] = stamp.." "..kind..": "..tostring(text)
+    self.EventSequence=(self.EventSequence or 0)+1
+    log[#log+1] = stamp.." [run "..tostring(self.RunSerial or 0).." #"..self.EventSequence.."] "..kind..": "..tostring(text)
     if #log > 60 then table.remove(log, 1) end
+end
+function Extension:CaptureTrace()
+    if not self.Settings.AutoPlay or self.Clock<(self.NextTrace or -100) then return end
+    self.NextTrace=self.Clock+0.5
+    local _,h,root=characterParts(self.Player)
+    if not root then return end
+    local goal=self.OffenseGoal or self.MatchGoal
+    local power="?";pcall(function()power=tostring(self.Player:GetAttribute("Power"))end)
+    local row=string.format("run="..tostring(self.RunSerial or 0).." T+%.2f state=%s pos=(%.1f,%.1f,%.1f) speed=%.1f rim=%.1f power=%s shield=%s setup=%s move=%s route=%s shot=%s",
+        self.Clock-(self.AutoPlayStarted or 0),tostring(self.State),root.Position.X,root.Position.Y,root.Position.Z,
+        root.AssemblyLinearVelocity.Magnitude,goal and distance(root.Position,goal.Position) or -1,power,
+        tostring(self.ProtectFacing==true),tostring(self.PreparingShot==true),tostring(self.DribbleStatus),
+        tostring(self.AutoPlayStatus),tostring(self.ShotBlockReason))
+    self.TraceLog=self.TraceLog or {};table.insert(self.TraceLog,row)
+    if #self.TraceLog>120 then table.remove(self.TraceLog,1) end
 end
 function Extension:Connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -138,6 +154,8 @@ function Extension:SetAutoPlay(enabled)
         pcall(self.AutoPlayToggle.SetValue, enabled)
     end
     if enabled then
+        self.RunSerial=(self.RunSerial or 0)+1
+        self.NextTrace=nil
         -- Auto-play defends on its own, so Blessed's Auto Guard is switched
         -- off (one movement writer) and restored when Auto-play stops.
         self.AutoPlaySnapshot, self.AutoPlayApplied = {}, {}
@@ -159,6 +177,8 @@ function Extension:SetAutoPlay(enabled)
         end
         self.AutoPlaySnapshot, self.AutoPlayApplied, self.AutoPlayStatus = nil, nil, "Off"
         self.State, self.PendingState = "Off", nil
+        self.StateSince,self.Holder,self.StopReason=self.Clock,nil,"Auto-play disabled"
+        self.PreparingShot,self.ProtectFacing=false,false
         self:Log("toggle", "Auto-play disabled (Auto Guard restored)")
     end
 end
@@ -335,6 +355,7 @@ function Extension:Tick(dt)
     self.Clock = self.Clock + math.max(0, math.min(dt, 0.5))
     if self.ReleaseDribbleKeys then self:ReleaseDribbleKeys(false) end
     if self.ShotTrack and self.TrackShot then self:TrackShot() end
+    self:CaptureTrace()
     self.TickAccumulator = (self.TickAccumulator or 0) + dt
     -- Faster decisions when an attacker is close; 10 Hz otherwise.
     if self.TickAccumulator < (self.PlanInterval or 0.1) then return end
@@ -429,6 +450,8 @@ function Extension:StatusText()
         "Shots sent "..tostring(self.ShotAttempts or 0).." released "..tostring(self.ShotsReleased or 0)
             .." near rim "..tostring(self.ShotsNearRim or 0).." | dunks "..tostring(self.DunkAttempts or 0).."/"..tostring(self.DunksStarted or 0)
             .." | contests "..tostring(self.ContestCount or 0),
+        "Dribble "..tostring(self.DribbleStatus or "-").." | shield "..tostring(self.ProtectFacing==true).." | setup "..tostring(self.PreparingShot==true),
+        "Arc "..tostring(self.Settings.AimbotType).." delay "..tostring(self.Settings.ShotDelay).." | planning "..tostring(self.PlanCount or 0),
         "Last error: "..tostring(self.LastError or "none"),
     }
     local log=self.EventLog or {}
@@ -544,7 +567,9 @@ function Extension:InstallControls(section)
         end
     end})
     section:NewButton({Title = "Copy Auto-play log", Callback = function()
-        local text=self:StatusText().."\n--- events ---\n"..table.concat(self.EventLog or {},"\n")
+        local counts={};for key,count in pairs(self.MoveCounts or {})do counts[#counts+1]=key.."="..count end;table.sort(counts)
+        local text=self:StatusText().."\nMoves "..table.concat(counts,", ").."\n--- events ---\n"..table.concat(self.EventLog or {},"\n")
+            .."\n--- tactical trace (0.5s samples, latest 60s) ---\n"..table.concat(self.TraceLog or {},"\n")
         local copy=self.Environment.setclipboard or self.Environment.toclipboard
         if type(copy)=="function" then pcall(copy,text) end
         self.LastLogCopy=text

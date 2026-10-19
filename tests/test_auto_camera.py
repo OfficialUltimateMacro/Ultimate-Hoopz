@@ -39,8 +39,8 @@ assert(math.abs(d1-d0)<1.5 and d1>=10,'camera radius stable, no creeping zoom-in
 assert(camera.CFrame.Position.Y>root.Position.Y+5,'elevated court view')
 local toGoal=goal.Position-root.Position;local lk=camera.CFrame.LookVector
 assert(lk.X>0.8,'shift-lock camera looks away from defender to shield ball')
-e.OpponentReads={};for _=1,180 do e:UpdateAutoFacing(1/60) end
-lk=camera.CFrame.LookVector;assert((lk.X*toGoal.X+lk.Z*toGoal.Z)>0,'resume basket view when pressure ends')
+e.OpponentReads={};e.PreparingShot=true;for _=1,180 do e:UpdateAutoFacing(1/60) end
+lk=camera.CFrame.LookVector;assert((lk.X*toGoal.X+lk.Z*toGoal.Z)>0,'resume basket view for shot setup')
 local before=camera.CFrame.Position;e.AutoMovePoint=root.Position+v(8,0,-8);e:UpdateAutoFacing(1/60);e.AutoMovePoint=root.Position+v(-8,0,8);e:UpdateAutoFacing(1/60)
 assert((camera.CFrame.Position-before).Magnitude<1,'route flips do not jerk camera')
 input.GetMouseDelta=function()return {Magnitude=4}end;e:UpdateAutoFacing(.05)
