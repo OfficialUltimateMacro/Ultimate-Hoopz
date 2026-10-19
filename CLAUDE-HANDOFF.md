@@ -45,3 +45,9 @@ Pressure escapes: no four-attempt possession cap; retry interval reduced from 0.
 ## Follow-up (Claude): live-game log fixes
 
 From a user-supplied Auto-play log (not stored in the repository): possessions began about 99 studs out after resets and were lost within 3-4 s while escaping sideways; the pickup sampler never evaluated an event (normal=0), consistent with an extra static ball on the court. Changes: CourtBallSample ignores balls never seen held or moving (BallMotion) and counts sampler outcomes; reset pause 0.6 -> 0.25 s; ReactiveRoute stops count toward the SpaceReset fallback. A straight-line "attack into range" variant was tried and reverted because tests/test_checkball_attack.py (0.25 s delayed defender, STEAL radius env, default 6) showed it lost every possession versus 4/4 for the previous release. Current build equals the previous release on that drill (4/4 at radius 6, 3/4 at 8); a wider route buffer (9-11) did not help.
+
+## Rim finish, sampler identity, early-jumper spacing
+- offense.lua: TryDunk has no SpaceAt gate and only a geometry (WalkClear) approach check; new RimFinishPoint steps to the rim side away from the nearest defender. The DunkMode branch uses it inside DunkReach+8 with no dribble moves. Accepted dunks raise DunkReach by 0.5 (cap 12).
+- CanTakeShot: a defender within 7 studs blocks a jumper for the first 2.5 s held (live logs showed jumpers stripped mid-routine); after that, contested shots go. The check-ball drill still shoots 4/4.
+- pickup.lua CourtBallSample: held ball wins; a loose part within 7 studs of the holder counts as the same ball; strays are ignored while one is held; multiple loose balls resolve to the tracked/nearest ball (ambiguous only if tied within 6 studs or nearest >30). The regression is in test_pickup_evidence (0b).
+- Live behaviour unverified.

@@ -365,8 +365,15 @@ function Extension:CanTakeShot(root)
         self.ShotBlockReason="Line hit near the hoop for 8s: shooting anyway"
         return true
     end
-    -- Defenders never veto the shot: contested shots go up immediately.
     local space, jumping = self:SpaceAt(root.Position, self.OpponentReads or {})
+    -- Live logs: jumpers wound up with a defender inside steal reach were
+    -- taken mid-routine (25 sent, 3 released). Below 7 studs, drive/dunk
+    -- instead for the first 2.5 s of the possession; after that the
+    -- contested jumper goes anyway (a chasing defender never clears).
+    local heldFor = self.PossessionStart and self.Clock-self.PossessionStart or 0
+    if space < 7 and not self.ForceShot and heldFor < 2.5 then
+        self.ShotBlockReason="Defender within steal reach: drive instead";return false
+    end
     self.ShotContested = space < 10 or jumping
     self.ShotBlockReason = self.ShotContested and "Contested: shooting anyway" or "Open and in range"
     return true
@@ -907,24 +914,47 @@ end
 -- Dunks
 ---------------------------------------------------------------------------
 function Extension:TryDunk(root, goal)
-    if self:SpaceAt(root.Position,self.OpponentReads or {})<8 then self.ShotBlockReason="Dunk lane crowded: waiting for clearance";return false end
+    -- No spacing gate: close to the rim the dunk goes up immediately (user
+    -- preference). Only real geometry (walls/poles) between us and the rim
+    -- holds it.
     local reach=flat(goal.Position-root.Position).Magnitude
     if reach>(self.DunkReach or 9) then return false end
     local axis=unit(flat(root.Position-goal.Position))
     local approach=self.Environment.Vector3.new(goal.Position.X,root.Position.Y,goal.Position.Z)+axis*2.5
-    if not self:PossessionPathClear(root,approach,self.OpponentReads or {})
-        or not self:WalkClear(root.Position,approach,self:MakeRayParams()) then
-        self.ShotBlockReason="Dunk approach obstructed: hold clearance";return false
+    if not self:WalkClear(root.Position,approach,self:MakeRayParams()) then
+        self.ShotBlockReason="Dunk approach obstructed by geometry";return false
     end
+    self:ReleaseDribbleKeys(true)
     if not self:PulseKey("T",0.65,1.2,true) then return false end
     self.DunkAttempts=(self.DunkAttempts or 0)+1
-    self.LastShotResult="Dunk key T sent at "..string.format("%.1f",reach).." studs"
+    local space=self:SpaceAt(root.Position,self.OpponentReads or {})
+    self.LastShotResult="Dunk key T sent at "..string.format("%.1f",reach).." studs (defender space "..string.format("%.1f",space)..")"
     self.AutoPlayStatus="Dunking"
     self.DunkingUntil=nil -- Input is not proof the server started a dunk.
     if self.StartShotTrack then self:StartShotTrack("Dunk", self.Player.Character, goal, reach) end
     return true
 end
-
+-- Rim finish: inside the close zone, no dribble moves. Step to the side of
+-- the rim away from the nearest defender and keep pressing the dunk.
+function Extension:RimFinishPoint(root, goal, opponents)
+    local V3=self.Environment.Vector3
+    local axis=unit(flat(root.Position-goal.Position))
+    if axis.Magnitude<0.5 then axis=V3.new(0,0,1) end
+    local side=V3.new(-axis.Z,0,axis.X)
+    local nearest, best=nil, math.huge
+    for _, opponent in ipairs(opponents) do
+        local d=flat((opponent.Predicted or opponent.Position)-root.Position).Magnitude
+        if d<best then nearest, best=opponent, d end
+    end
+    local offset=0
+    if nearest and best<14 then
+        local rel=flat((nearest.Predicted or nearest.Position)-root.Position)
+        local sign=(rel:Dot(side)>=0) and -1 or 1
+        offset=sign*math.max(3,math.min(6,14-best))
+    end
+    local target=goal.Position+axis*2.5+side*offset
+    return V3.new(target.X,root.Position.Y,target.Z), nearest, best
+end
 ---------------------------------------------------------------------------
 -- Offense decision loop (10 Hz)
 ---------------------------------------------------------------------------
@@ -970,7 +1000,7 @@ function Extension:OffenseStep(character, humanoid, root)
     if self.Settings.AutoPlayDunk ~= false then
         if rimDistance < minimum-3 then self.DunkMode=true
         elseif rimDistance > minimum and not (self.DriveUntil and now < self.DriveUntil) then self.DunkMode=false end
-        if not self.DunkMode and space < 5 and rimDistance < 64 and held < 5 then
+        if not self.DunkMode and space < 7 and rimDistance < 64 and held < 5 then
             local corridor = true
             for _, opponent in ipairs(opponents) do
                 if segmentDistance(opponent.Predicted, root.Position, goal.Position) < 4
@@ -992,6 +1022,19 @@ function Extension:OffenseStep(character, humanoid, root)
     if self.DunkMode then
         self.OpenSince,self.SettlePosition,self.SettleSince=nil,nil,nil
         if grounded then self:TryDunk(root,goal) end
+        local flatRim = flat(goal.Position-root.Position).Magnitude
+        if flatRim <= (self.DunkReach or 9)+8 then
+            -- Close zone: no dribbles, no escape moves; step away from the
+            -- defender toward the open side of the rim and dunk.
+            self:ReleaseDribbleKeys(true)
+            local target = self:RimFinishPoint(root, goal, opponents)
+            if self:WalkClear(root.Position,target,params) then
+                self.RimBlockedSince,self.RimFallbackLogged=nil,nil
+                self.AutoMovePoint=target
+                self.AutoPlayStatus=(rimStrategy and "Rim strategy: " or "").."Rim finish: away from defender, dunking"
+                return false
+            end
+        end
         local approach = unit(flat(root.Position-goal.Position))
         local rim=goal.Position+approach*2.5
         rim=self.Environment.Vector3.new(rim.X,root.Position.Y,rim.Z)
@@ -1120,6 +1163,8 @@ function Extension:FinishShotTrack(text)
     if track.Kind == "Dunk" then
         if track.Released or track.Action == "Dunking" then
             self.DunksStarted = (self.DunksStarted or 0)+1
+            -- Accepted: allow a slightly longer dunk next time (capped).
+            self.DunkReach = math.min(12, (self.DunkReach or 9)+0.5)
         else
             -- T was not accepted from this distance: try closer next time.
             self.DunkReach = math.max(4, (self.DunkReach or 9)-2)

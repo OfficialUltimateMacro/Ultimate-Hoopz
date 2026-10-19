@@ -45,6 +45,16 @@ local function hold2(who,at) hold(who,at);F.balls[#F.balls+1]=rack end
 hold2('us');tick(10);F.er.Position=F.root.Position+v(3,0,0);tick(3);hold2('them');tick(10)
 assert(e.PickupEvidence.Normal>=1,'evaluated despite a static rack ball on court')
 local summary=e:EvidenceSummary();assert(summary:find('samples%['),'sampler diagnostics shown')
+-- 0b. Live-log regression: the dribbled copy of a held ball next to its
+-- holder, plus a far stray ball, must not make samples ambiguous.
+local copy=F.part(v(0,0,0),'Basketball');copy.Owner=nil;F.world.DescendantAdded:Fire(copy)
+local stray=F.part(v(10,3,-40),'Basketball');stray.Owner=nil;F.world.DescendantAdded:Fire(stray)
+hold('us');F.balls={copy,stray,rack};copy.Position=F.root.Position+v(2,0,1);tick(2);copy.Position=F.root.Position+v(1,0,2)
+stray.Position=v(12,3,-40);tick(2)
+local before=e.PickupMarks.Samples['multiple balls on court'] or 0
+tick(30)
+assert((e.PickupMarks.Samples['multiple balls on court'] or 0)==before,'held-ball copy and stray ball are not ambiguity')
+copy.Parent=nil;stray.Parent=nil
 e.Clock=e.Clock+6
 -- 1. Normal steals never add evidence (opponent in contact range).
 for i=1,5 do

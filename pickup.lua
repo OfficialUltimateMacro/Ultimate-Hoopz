@@ -23,17 +23,15 @@ end
 function Extension:CourtBallSample()
     local goal = self.MatchGoal
     if not goal or not goal.Parent then return nil, "no locked court" end
-    local found, count = nil, 0
-    local players = {}
+    local players, held = {}, {}
     for _, player in ipairs(self:PlayerList()) do
         local character, _, root = characterParts(player)
         if character and self:MatchPlayer(player) then
             players[player] = {Position=root.Position, Velocity=root.AssemblyLinearVelocity, Character=character}
-            local held = heldBall(character)
-            if held then
-                local part = ballPart(held)
-                count = count+1
-                found = {Position=(part and part.Position) or root.Position, Holder=player}
+            local ball = heldBall(character)
+            if ball then
+                local part = ballPart(ball)
+                held[#held+1] = {Position=(part and part.Position) or root.Position, Holder=player, Part=part, Root=root.Position}
             end
         end
     end
@@ -41,6 +39,7 @@ function Extension:CourtBallSample()
     -- seen held or moving count as the game ball.
     local seen = self.BallMotion or setmetatable({}, {__mode="k"})
     self.BallMotion = seen
+    local loose = {}
     for part in pairs(self:BallSet()) do
         if part.Parent then
             local info = seen[part]
@@ -48,13 +47,42 @@ function Extension:CourtBallSample()
             if self:BallOwner(part) then info.Active = true
             elseif not info.Active and (part.Position-info.Origin).Magnitude > 1 then info.Active = true end
             if info.Active and not self:BallOwner(part) and self:MatchPosition(part.Position) then
-                count = count+1
-                found = {Position=part.Position, Velocity=part.AssemblyLinearVelocity}
+                -- The dribbled/visual copy of a held ball sits next to its
+                -- holder: it is the same game ball, not a second one.
+                local duplicate = false
+                for _, h in ipairs(held) do
+                    if part == h.Part or (part.Position-h.Root).Magnitude <= 7 then duplicate = true; break end
+                end
+                if not duplicate then loose[#loose+1] = part end
             end
         end
     end
-    if count == 0 then return nil, "no ball on court" end
-    if count > 1 then return nil, "multiple balls on court" end
+    if #held > 1 then return nil, "multiple balls held" end
+    local found
+    if #held == 1 then
+        -- One held ball on the court is the game ball; other loose balls
+        -- (strays, other courts' rebounds) are ignored while it is held.
+        local h = held[1]
+        found = {Position=h.Position, Holder=h.Holder}
+        self.GameBallPart = h.Part or self.GameBallPart
+    elseif #loose == 0 then return nil, "no ball on court"
+    else
+        -- Several loose balls: keep the one tracked last, otherwise take the
+        -- one clearly nearest the match players (ambiguous only when tied).
+        local pick
+        for _, part in ipairs(loose) do if part == self.GameBallPart then pick = part end end
+        if not pick then
+            local best, second = math.huge, math.huge
+            for _, part in ipairs(loose) do
+                local d = math.huge
+                for _, info in pairs(players) do d = math.min(d, (part.Position-info.Position).Magnitude) end
+                if d < best then second, best, pick = best, d, part elseif d < second then second = d end
+            end
+            if #loose > 1 and (best > 30 or second-best < 6) then return nil, "multiple balls on court" end
+        end
+        self.GameBallPart = pick
+        found = {Position=pick.Position, Velocity=pick.AssemblyLinearVelocity}
+    end
     found.Players = players
     return found
 end

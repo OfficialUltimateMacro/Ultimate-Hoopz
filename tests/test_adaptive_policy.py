@@ -4,7 +4,8 @@ folder=Path(__file__).resolve().parent;source=(folder.parent/'Ultimate.Blessed.d
 lua=r'''_G.ULTIMATE_BLESSED_INSPECT=true;bit32={}
 local F=(function() FIXTURE end)();local app=assert(load(SOURCE,'adaptive','t',_G))();local e=app.Extensions;local v=F.v
 local s={AutoGuard=true,AutoGuardKeybind='L',Aimbot=true,AimbotType='High',ShotDelay=.28}
-e:Install(F.env,s);F.own.Character.ball=F.container(F.own.Character,true)
+e:Install(F.env,s);assert(s.AutoGuard==false,'Auto Guard off by default');s.AutoGuard=true -- user enables it
+F.own.Character.ball=F.container(F.own.Character,true)
 local shown,notices;local notices={}
 local setter=app.CustomizeClosure('root.1061',function(value)s.AutoGuard=value end,F.env,{[0]=s})
 local caps={[0]=s,[1]={SetValue=function()end},[3]={SetValue=function(value)shown=value;setter(value)end},[2]={Notification=function()return{new=function(row)notices[#notices+1]=row end}end}}
@@ -33,7 +34,9 @@ e.OpponentReads={};assert(e:CanTakeShot(root),'clear shot remains available')
 e.State='Own';e.PreparingShot=false;e.Shooting=false;e.AutoMovePoint=nil;e.Clock=10;e.LastDribble=-100;e.MoveCooldowns={}
 e:ProtectiveIdle();assert(e.LastMove=='R' or e.LastMove=='V' or e.LastMove=='B','waiting still uses protective dribble moves')
 root.Position=v(8,3,0);e.DunkMode=true;e.OpponentReads={{Player=F.enemy,Position=v(4,3,0),Predicted=v(4,3,0),Velocity=v()}}
-assert(not e:PossessionPathClear(root,v(4,3,0),e.OpponentReads) and not e:TryDunk(root,F.goal),'dunks do not bypass body buffer')
+assert(e:TryDunk(root,F.goal),'close to the rim the dunk goes up even with a defender on the body (user preference)')
+local target=e:RimFinishPoint(root,F.goal,{{Player=F.enemy,Position=v(6,3,3),Predicted=v(6,3,3),Velocity=v()}})
+assert(target.Z<-1 and math.abs(target.Y-root.Position.Y)<.01,'rim finish steps to the side away from the defender')
 e.OpponentReads={};local original=F.world.Raycast;F.world.Raycast=function()return nil end
 e:ResetOffense();e.OffenseCharacter=F.own.Character;e.OffenseGoal=F.goal;e.ReadOpponents=function()return{}end
 local before=e.DunkAttempts or 0;e:OffenseStep(F.own.Character,F.oh,root)

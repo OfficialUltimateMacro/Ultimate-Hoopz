@@ -524,6 +524,7 @@ function Extension:Install(environment, settings)
         settings.AutoPlayMagnetResponse = settings.AutoPlayMagnetResponse or "Manual confirm"
         settings.AutoPlayRimOverride = false
         settings.BallMagnet = UltimatePreferences.BallMagnet
+        settings.AutoGuard = UltimatePreferences.AutoGuard -- off by default; L or the toggle enables it
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -544,6 +545,7 @@ function Extension:Install(environment, settings)
     settings.AutoPlayMagnetResponse = "Manual confirm"
     settings.AutoPlayRimOverride = false
     settings.BallMagnet = UltimatePreferences.BallMagnet
+    settings.AutoGuard = UltimatePreferences.AutoGuard -- off by default; L or the toggle enables it
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then

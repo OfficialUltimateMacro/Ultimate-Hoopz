@@ -32,7 +32,7 @@ end
 -- Editable Ultimate preferences layered over the recovered Blessed program.
 local UltimatePreferences = {
     AutoGuardKey = "L", HideAimbotKeyPicker = true,
-    ShotDelay = 0.28, AimbotType = "High", Aimbot = true, AutoGuard = true, BallCheck = true,
+    ShotDelay = 0.28, AimbotType = "High", Aimbot = true, AutoGuard = false, BallCheck = true,
     MatchTargetJump = true, AutoPlay = false,
     BallMagnet = false, MagnetStrength = 50,
     BallReach = true, ReachStrength = 2,
@@ -628,6 +628,7 @@ function Extension:Install(environment, settings)
         settings.AutoPlayMagnetResponse = settings.AutoPlayMagnetResponse or "Manual confirm"
         settings.AutoPlayRimOverride = false
         settings.BallMagnet = UltimatePreferences.BallMagnet
+        settings.AutoGuard = UltimatePreferences.AutoGuard -- off by default; L or the toggle enables it
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
@@ -648,6 +649,7 @@ function Extension:Install(environment, settings)
     settings.AutoPlayMagnetResponse = "Manual confirm"
     settings.AutoPlayRimOverride = false
     settings.BallMagnet = UltimatePreferences.BallMagnet
+    settings.AutoGuard = UltimatePreferences.AutoGuard -- off by default; L or the toggle enables it
     self:Connect(self.Run.Heartbeat, function(dt)
         local ok, message = pcall(self.Tick, self, dt)
         if not ok then
@@ -1325,8 +1327,15 @@ function Extension:CanTakeShot(root)
         self.ShotBlockReason="Line hit near the hoop for 8s: shooting anyway"
         return true
     end
-    -- Defenders never veto the shot: contested shots go up immediately.
     local space, jumping = self:SpaceAt(root.Position, self.OpponentReads or {})
+    -- Live logs: jumpers wound up with a defender inside steal reach were
+    -- taken mid-routine (25 sent, 3 released). Below 7 studs, drive/dunk
+    -- instead for the first 2.5 s of the possession; after that the
+    -- contested jumper goes anyway (a chasing defender never clears).
+    local heldFor = self.PossessionStart and self.Clock-self.PossessionStart or 0
+    if space < 7 and not self.ForceShot and heldFor < 2.5 then
+        self.ShotBlockReason="Defender within steal reach: drive instead";return false
+    end
     self.ShotContested = space < 10 or jumping
     self.ShotBlockReason = self.ShotContested and "Contested: shooting anyway" or "Open and in range"
     return true
@@ -1867,24 +1876,47 @@ end
 -- Dunks
 ---------------------------------------------------------------------------
 function Extension:TryDunk(root, goal)
-    if self:SpaceAt(root.Position,self.OpponentReads or {})<8 then self.ShotBlockReason="Dunk lane crowded: waiting for clearance";return false end
+    -- No spacing gate: close to the rim the dunk goes up immediately (user
+    -- preference). Only real geometry (walls/poles) between us and the rim
+    -- holds it.
     local reach=flat(goal.Position-root.Position).Magnitude
     if reach>(self.DunkReach or 9) then return false end
     local axis=unit(flat(root.Position-goal.Position))
     local approach=self.Environment.Vector3.new(goal.Position.X,root.Position.Y,goal.Position.Z)+axis*2.5
-    if not self:PossessionPathClear(root,approach,self.OpponentReads or {})
-        or not self:WalkClear(root.Position,approach,self:MakeRayParams()) then
-        self.ShotBlockReason="Dunk approach obstructed: hold clearance";return false
+    if not self:WalkClear(root.Position,approach,self:MakeRayParams()) then
+        self.ShotBlockReason="Dunk approach obstructed by geometry";return false
     end
+    self:ReleaseDribbleKeys(true)
     if not self:PulseKey("T",0.65,1.2,true) then return false end
     self.DunkAttempts=(self.DunkAttempts or 0)+1
-    self.LastShotResult="Dunk key T sent at "..string.format("%.1f",reach).." studs"
+    local space=self:SpaceAt(root.Position,self.OpponentReads or {})
+    self.LastShotResult="Dunk key T sent at "..string.format("%.1f",reach).." studs (defender space "..string.format("%.1f",space)..")"
     self.AutoPlayStatus="Dunking"
     self.DunkingUntil=nil -- Input is not proof the server started a dunk.
     if self.StartShotTrack then self:StartShotTrack("Dunk", self.Player.Character, goal, reach) end
     return true
 end
-
+-- Rim finish: inside the close zone, no dribble moves. Step to the side of
+-- the rim away from the nearest defender and keep pressing the dunk.
+function Extension:RimFinishPoint(root, goal, opponents)
+    local V3=self.Environment.Vector3
+    local axis=unit(flat(root.Position-goal.Position))
+    if axis.Magnitude<0.5 then axis=V3.new(0,0,1) end
+    local side=V3.new(-axis.Z,0,axis.X)
+    local nearest, best=nil, math.huge
+    for _, opponent in ipairs(opponents) do
+        local d=flat((opponent.Predicted or opponent.Position)-root.Position).Magnitude
+        if d<best then nearest, best=opponent, d end
+    end
+    local offset=0
+    if nearest and best<14 then
+        local rel=flat((nearest.Predicted or nearest.Position)-root.Position)
+        local sign=(rel:Dot(side)>=0) and -1 or 1
+        offset=sign*math.max(3,math.min(6,14-best))
+    end
+    local target=goal.Position+axis*2.5+side*offset
+    return V3.new(target.X,root.Position.Y,target.Z), nearest, best
+end
 ---------------------------------------------------------------------------
 -- Offense decision loop (10 Hz)
 ---------------------------------------------------------------------------
@@ -1930,7 +1962,7 @@ function Extension:OffenseStep(character, humanoid, root)
     if self.Settings.AutoPlayDunk ~= false then
         if rimDistance < minimum-3 then self.DunkMode=true
         elseif rimDistance > minimum and not (self.DriveUntil and now < self.DriveUntil) then self.DunkMode=false end
-        if not self.DunkMode and space < 5 and rimDistance < 64 and held < 5 then
+        if not self.DunkMode and space < 7 and rimDistance < 64 and held < 5 then
             local corridor = true
             for _, opponent in ipairs(opponents) do
                 if segmentDistance(opponent.Predicted, root.Position, goal.Position) < 4
@@ -1952,6 +1984,19 @@ function Extension:OffenseStep(character, humanoid, root)
     if self.DunkMode then
         self.OpenSince,self.SettlePosition,self.SettleSince=nil,nil,nil
         if grounded then self:TryDunk(root,goal) end
+        local flatRim = flat(goal.Position-root.Position).Magnitude
+        if flatRim <= (self.DunkReach or 9)+8 then
+            -- Close zone: no dribbles, no escape moves; step away from the
+            -- defender toward the open side of the rim and dunk.
+            self:ReleaseDribbleKeys(true)
+            local target = self:RimFinishPoint(root, goal, opponents)
+            if self:WalkClear(root.Position,target,params) then
+                self.RimBlockedSince,self.RimFallbackLogged=nil,nil
+                self.AutoMovePoint=target
+                self.AutoPlayStatus=(rimStrategy and "Rim strategy: " or "").."Rim finish: away from defender, dunking"
+                return false
+            end
+        end
         local approach = unit(flat(root.Position-goal.Position))
         local rim=goal.Position+approach*2.5
         rim=self.Environment.Vector3.new(rim.X,root.Position.Y,rim.Z)
@@ -2080,6 +2125,8 @@ function Extension:FinishShotTrack(text)
     if track.Kind == "Dunk" then
         if track.Released or track.Action == "Dunking" then
             self.DunksStarted = (self.DunksStarted or 0)+1
+            -- Accepted: allow a slightly longer dunk next time (capped).
+            self.DunkReach = math.min(12, (self.DunkReach or 9)+0.5)
         else
             -- T was not accepted from this distance: try closer next time.
             self.DunkReach = math.max(4, (self.DunkReach or 9)-2)
@@ -2318,17 +2365,15 @@ end
 function Extension:CourtBallSample()
     local goal = self.MatchGoal
     if not goal or not goal.Parent then return nil, "no locked court" end
-    local found, count = nil, 0
-    local players = {}
+    local players, held = {}, {}
     for _, player in ipairs(self:PlayerList()) do
         local character, _, root = characterParts(player)
         if character and self:MatchPlayer(player) then
             players[player] = {Position=root.Position, Velocity=root.AssemblyLinearVelocity, Character=character}
-            local held = heldBall(character)
-            if held then
-                local part = ballPart(held)
-                count = count+1
-                found = {Position=(part and part.Position) or root.Position, Holder=player}
+            local ball = heldBall(character)
+            if ball then
+                local part = ballPart(ball)
+                held[#held+1] = {Position=(part and part.Position) or root.Position, Holder=player, Part=part, Root=root.Position}
             end
         end
     end
@@ -2336,6 +2381,7 @@ function Extension:CourtBallSample()
     -- seen held or moving count as the game ball.
     local seen = self.BallMotion or setmetatable({}, {__mode="k"})
     self.BallMotion = seen
+    local loose = {}
     for part in pairs(self:BallSet()) do
         if part.Parent then
             local info = seen[part]
@@ -2343,13 +2389,42 @@ function Extension:CourtBallSample()
             if self:BallOwner(part) then info.Active = true
             elseif not info.Active and (part.Position-info.Origin).Magnitude > 1 then info.Active = true end
             if info.Active and not self:BallOwner(part) and self:MatchPosition(part.Position) then
-                count = count+1
-                found = {Position=part.Position, Velocity=part.AssemblyLinearVelocity}
+                -- The dribbled/visual copy of a held ball sits next to its
+                -- holder: it is the same game ball, not a second one.
+                local duplicate = false
+                for _, h in ipairs(held) do
+                    if part == h.Part or (part.Position-h.Root).Magnitude <= 7 then duplicate = true; break end
+                end
+                if not duplicate then loose[#loose+1] = part end
             end
         end
     end
-    if count == 0 then return nil, "no ball on court" end
-    if count > 1 then return nil, "multiple balls on court" end
+    if #held > 1 then return nil, "multiple balls held" end
+    local found
+    if #held == 1 then
+        -- One held ball on the court is the game ball; other loose balls
+        -- (strays, other courts' rebounds) are ignored while it is held.
+        local h = held[1]
+        found = {Position=h.Position, Holder=h.Holder}
+        self.GameBallPart = h.Part or self.GameBallPart
+    elseif #loose == 0 then return nil, "no ball on court"
+    else
+        -- Several loose balls: keep the one tracked last, otherwise take the
+        -- one clearly nearest the match players (ambiguous only when tied).
+        local pick
+        for _, part in ipairs(loose) do if part == self.GameBallPart then pick = part end end
+        if not pick then
+            local best, second = math.huge, math.huge
+            for _, part in ipairs(loose) do
+                local d = math.huge
+                for _, info in pairs(players) do d = math.min(d, (part.Position-info.Position).Magnitude) end
+                if d < best then second, best, pick = best, d, part elseif d < second then second = d end
+            end
+            if #loose > 1 and (best > 30 or second-best < 6) then return nil, "multiple balls on court" end
+        end
+        self.GameBallPart = pick
+        found = {Position=pick.Position, Velocity=pick.AssemblyLinearVelocity}
+    end
     found.Players = players
     return found
 end

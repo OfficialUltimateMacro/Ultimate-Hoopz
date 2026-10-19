@@ -58,16 +58,16 @@ root.Position=spot;root.AssemblyLinearVelocity=v();e.Clock=1
 assert(not e:OffenseStep(own.Character,oh,root));e.Clock=1.3;assert(e:OffenseStep(own.Character,oh,root),'open and settled allows shot')
 er.Position=root.Position+v(-5,0,0);eh.FloorMaterial='Air'
 e.Clock=2;e.OpenSince=nil;e.SettlePosition=nil
-assert(not e:OffenseStep(own.Character,oh,root) and e.AutoPlayStatus=='Pump fake: defender in the air','airborne blocker in front: brief pump fake')
-e.Clock=2.5;assert(e:OffenseStep(own.Character,oh,root),'pump fake bounded: shoots through the contest')
-er.Position=root.Position+v(-1,0,0);eh.FloorMaterial='Ground';e.Clock=2.55;e.FakeShotStart=nil
-assert(e:OffenseStep(own.Character,oh,root),'zero space still shoots (user preference)')
+assert(not e:OffenseStep(own.Character,oh,root),'airborne blocker within steal reach early in the possession: no jumper')
+e.Clock=2.5;e.PossessionStart=0;e:OffenseStep(own.Character,oh,root);e.Clock=2.8;assert(e:OffenseStep(own.Character,oh,root),'after 2.5 s held: shoots through the contest')
+er.Position=root.Position+v(-1,0,0);eh.FloorMaterial='Ground';e.Clock=2.85;e.FakeShotStart=nil
+assert(e:OffenseStep(own.Character,oh,root),'zero space still shoots once held past 2.5 s')
 e:ReleaseDribbleKeys(true)
 -- Inside the ring: drive to the rim and press T, not back out to the 3.
 er.Position=v(200,3,200);e:ResetOffense();e.OffenseGoal=goal;e.GoalDirection=v(1,0,0);e.OffenseCharacter=own.Character
 local saved=root.Position;root.Position=v(30,3,0);e.Clock=2.5;assert(not e:OffenseStep(own.Character,oh,root))
 assert(e.DunkMode and e.AutoMovePoint and e.AutoMovePoint.X<30,'drives toward rim inside 3pt ring')
-root.Position=v(4,3,0);e.Clock=2.6;e:OffenseStep(own.Character,oh,root);assert(keys[#keys][2]=='T' and keys[#keys][1] and e.DunkAttempts==1,'T dunk at rim')
+root.Position=v(4,3,0);e.Clock=2.6;e:OffenseStep(own.Character,oh,root);local tDown=false;for _,k in ipairs(keys)do if k[2]=='T' and k[1] then tDown=true end end;assert(tDown and e.DunkAttempts==1,'T dunk at rim')
 e.Clock=2.7;e:OffenseStep(own.Character,oh,root);assert(e.DunkAttempts==1,'dunk cooldown')
 s.AutoPlayDunk=false;e.Clock=4;e:OffenseStep(own.Character,oh,root);assert(not e.DunkMode,'auto-dunk toggle off');s.AutoPlayDunk=true
 e:ReleaseDribbleKeys(true);root.Position=saved;e:ResetOffense();e.OffenseGoal=goal;e.GoalDirection=v(1,0,0);e.OffenseCharacter=own.Character

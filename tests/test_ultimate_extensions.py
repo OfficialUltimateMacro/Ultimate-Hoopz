@@ -39,7 +39,8 @@ function env.workspace:GetDescendants()return self.parts end
 local services={Players=ps,UserInputService=input,RunService=rs,CollectionService=collection};env.game={GetService=function(_,n)return assert(services[n],n)end}
 local function settings()return {Aimbot=true,AutoGuard=true,AutoGuardKeybind='L',AutoGuardBallCheck=true,BallMagnet=true,BallReach=true,AimbotType='Low'}end
 local s=settings();e:Install(env,s);assert(s.BallMagnet==false,'startup forces Ball Magnet off');assert(s.AimbotKeybind==nil and s.AutoPlay==false and s.AutoGuardJumpMatch)
-local newer=settings();e:Install(env,newer);s=newer
+assert(s.AutoGuard==false,'startup forces Auto Guard off')
+local newer=settings();e:Install(env,newer);s=newer;assert(s.AutoGuard==false,'second settings table also off');s.AutoGuard=true -- user enables it
 local title,aimChanges,guardChanges=nil,0,0
 local description,notices=nil,0
 local captures={[0]=s,[1]={SetValue=function()aimChanges=aimChanges+1 end},[3]={SetValue=function()guardChanges=guardChanges+1 end},[2]={Notification=function()return{new=function(t)title=t.Title;description=t.Description;notices=notices+1 end}end}}
