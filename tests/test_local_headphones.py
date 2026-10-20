@@ -67,7 +67,7 @@ env.makefolder=function()end;env.isfolder=function()return false end
 env.getcustomasset=function(path)assert(files[path],'asset from saved file');return 'rbxasset://custom/'..path end
 local http=env.game.HttpGet
 env.game.HttpGet=function(_,url)if url:find('bad')then return '<html>not audio</html>' end;return 'ID3'..string.rep('x',64) end
-assert(not e:PlayLocalMusic('https://example.com/bad.mp3') and e.LocalMusicStatus:find('did not return MP3/OGG'),'non-audio link rejected')
+assert(not e:PlayLocalMusic('https://example.com/bad.mp3') and (e.LocalMusicStatus:find('did not return MP3/OGG') or e.LocalMusicStatus:find('web page')),'non-audio link rejected')
 assert(e:PlayLocalMusic('https://example.com/song.mp3',.5),'mp3 link plays')
 assert(e.LocalMusicSound.SoundId:find('^rbxasset://custom/UltimateMusic/track_') and e.LocalMusicSound.SoundId:find('%.mp3$'),'link saved and loaded locally')
 files['mysong.ogg']='OggS'..string.rep('y',64)
@@ -75,7 +75,30 @@ assert(e:PlayLocalMusic('mysong.ogg') and e.LocalMusicSound.SoundId=='rbxasset:/
 assert(not e:PlayLocalMusic('missing.mp3') and e.LocalMusicStatus:find('File not found'),'missing file reported')
 local gca=env.getcustomasset;env.getcustomasset=nil
 assert(not e:PlayLocalMusic('mysong.ogg') and e.LocalMusicStatus:find('cannot play audio files'),'executor without getcustomasset explained')
-env.getcustomasset=gca;env.game.HttpGet=http
+env.getcustomasset=gca
+-- Share links become direct downloads; streaming pages are refused clearly.
+assert(e:NormalizeMusicLink('https://www.dropbox.com/s/abc/song.mp3?dl=0')=='https://www.dropbox.com/s/abc/song.mp3?dl=1','dropbox share link')
+assert(e:NormalizeMusicLink('https://drive.google.com/file/d/AbC_1-2/view?usp=sharing')=='https://drive.google.com/uc?export=download&id=AbC_1-2','google drive share link')
+assert(e:NormalizeMusicLink('https://github.com/u/r/blob/main/a.mp3')=='https://raw.githubusercontent.com/u/r/main/a.mp3','github blob link')
+assert(not e:PlayLocalMusic('https://www.youtube.com/watch?v=x') and e.LocalMusicStatus:find('Streaming pages'),'youtube refused with guidance')
+-- Binary-safe request() is preferred over HttpGet and cached downloads are reused.
+local requested=0
+env.request=function(opts)requested=requested+1;return {StatusCode=200,Body='OggS'..string.rep('z',64)} end
+assert(e:PlayLocalMusic('https://cdn.example.com/a.ogg') and requested==1 and e.LocalMusicSound.SoundId:find('%.ogg$'),'request() download plays ogg')
+assert(e:PlayLocalMusic('https://cdn.example.com/a.ogg') and requested==1,'cached download reused')
+env.request=function()return {StatusCode=200,Body='<!DOCTYPE html><html>'} end
+assert(not e:PlayLocalMusic('https://cdn.example.com/page.mp3') and e.LocalMusicStatus:find('web page'),'html page explained')
+env.request=nil
+-- Empty box plays workspace/UltimateMusic as a playlist; Next advances and wraps.
+files['UltimateMusic/b.mp3']='ID3'..string.rep('b',64);files['UltimateMusic/a.ogg']='OggS'..string.rep('a',64)
+env.isfolder=function(p)return p=='UltimateMusic' end
+env.listfiles=function(dir)local out={};for k in pairs(files)do if k:sub(1,#dir+1)==dir..'/' then out[#out+1]=k end end;return out end
+assert(e:PlayLocalMusic('') and e.LocalMusicSound.SoundId=='rbxasset://custom/UltimateMusic/a.ogg' and e.LocalMusicSound.Looped==false,'folder playlist starts at first file')
+assert(e:NextLocalTrack(1) and e.LocalMusicSound.SoundId=='rbxasset://custom/UltimateMusic/b.mp3','next track')
+assert(e:NextLocalTrack(1) and e.LocalMusicSound.SoundId=='rbxasset://custom/UltimateMusic/a.ogg','playlist wraps: '..tostring(e.LocalMusicSound.SoundId)..' '..#e.MusicPlaylist)
+assert(e:PlayLocalMusic('a.ogg') and e.LocalMusicSound.SoundId=='rbxasset://custom/UltimateMusic/a.ogg','bare file name found in UltimateMusic folder')
+env.listfiles=nil;env.isfolder=function()return false end
+env.game.HttpGet=http
 assert(e:PlayLocalMusic('11111'));nextLoaded=false
 e.Screen=instance('ScreenGui');e.Screen.Parent=true;e:OpenLocalMusicPanel();local panel=e.LocalMusicPanel
 local id=panel:FindFirstChild('AudioId');local play=panel:FindFirstChild('Play');local stop=panel:FindFirstChild('Stop');local close=panel:FindFirstChild('Close');local volume=panel:FindFirstChild('Volume')
@@ -95,6 +118,6 @@ stop.Activated:Fire();assert(not e.LocalMusicSound and e.LocalHeadphonesEnabled,
 e:PlayLocalMusic('33333');local last=e.LocalMusicSound;e:Destroy()
 assert(last.Destroyed and panel.Destroyed and not e.LocalHeadphonesEnabled and not e:PlayLocalMusic('44444'),'unload cleanup and no playback after destroy')
 assert(F.input.InputChanged:Count()==0 and F.input.InputEnded:Count()==0,'drag handlers disconnected')
-return 'PASS: local custom visual (curved band, round cups), MP3/OGG link and workspace-file playback via getcustomasset, privacy/missing/unsupported messages, no physics mutation, respawn, ID/volume validation, playback replacement/loading/error, draggable reusable controls, off/stop/unload and stale-callback cleanup'
+return 'PASS: local custom visual (curved band, round cups), MP3/OGG link and workspace-file playback via getcustomasset, share-link conversion, request() downloads with cache, UltimateMusic folder playlist with next/wrap, privacy/missing/unsupported messages, no physics mutation, respawn, ID/volume validation, playback replacement/loading/error, draggable reusable controls, off/stop/unload and stale-callback cleanup'
 '''
 print(run(lua.replace('FIXTURE',fixture).replace('SOURCE','[====['+source+']====]')).decode())

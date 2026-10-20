@@ -98,7 +98,7 @@ e:UpdateRimStrategy();assert(#notices==1,'prompt not repeated for the same evide
 assert(e:ConfirmSuspectedOpponent() and (e:UpdateRimStrategy()) and e.AdaptiveRimOnly,'manual confirmation activates')
 assert(tostring(e.AdaptiveReason):find('suspected'),'reason shown')
 -- 6. Decay: confirmation expires, normal strategy resumes.
-e.Clock=e.Clock+400;e:UpdateRimStrategy()
+e.Clock=e.Clock+700;e:UpdateRimStrategy()
 assert(not e.AdaptiveRimOnly and e.RimConfirmedKey==nil and level()=='none','evidence decay exits the strategy')
 -- 7. Auto mode needs strong evidence (3 independent, large excess).
 s.AutoPlayMagnetResponse='Auto (experimental)'
@@ -106,7 +106,7 @@ anomaly(30);e.Clock=e.Clock+8;anomaly(30)
 e:UpdateRimStrategy();assert(level()=='suspected' and not e.AdaptiveRimOnly,'auto ignores suspected')
 e.Clock=e.Clock+8;anomaly(32);e:UpdateRimStrategy()
 assert(level()=='strong' and e.AdaptiveRimOnly,'auto activates after strong repeated evidence')
-e.Clock=e.Clock+250;e:UpdateRimStrategy();assert(not e.AdaptiveRimOnly,'auto exits when evidence decays')
+e.Clock=e.Clock+650;e:UpdateRimStrategy();assert(not e.AdaptiveRimOnly,'auto exits when evidence decays')
 -- 8. Off mode never acts; override acts without evidence and without accusing.
 s.AutoPlayMagnetResponse='Off';e.Clock=e.Clock+8;anomaly(30);e.Clock=e.Clock+8;anomaly(30);e.Clock=e.Clock+8;anomaly(30)
 e:UpdateRimStrategy();assert(not e.AdaptiveRimOnly,'off mode ignores evidence')

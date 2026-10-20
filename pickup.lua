@@ -6,8 +6,8 @@
 -- beyond a generous reach allowance is counted. A magnet that physically
 -- drags the ball close before pickup looks like a normal pickup and is not.
 local PICKUP = {
-    BaseReach = 9, MinDistance = 14, Latency = 0.25, Margin = 2,
-    StaleAge = 0.25, Tau = 120, Window = 300, History = 1.2, MaxSamples = 90,
+    BaseReach = 7, MinDistance = 12, Latency = 0.25, Margin = 2,
+    StaleAge = 0.25, Tau = 300, Window = 600, History = 1.2, MaxSamples = 90,
     MaxEvents = 8, Spacing = 5,
 }
 Extension.PickupConfig = PICKUP
@@ -185,7 +185,10 @@ function Extension:EvaluatePickup(previous, current)
     if recent(marks.InGameChanged, now, 2) or recent(marks.MatchChanged, now, 2) then return self:RejectPickup(name, "match state changed") end
     local offset = previous.Position-before.Position
     local reach = pflat(offset).Magnitude+math.max(0, math.abs(offset.Y)-6)
-    local speed = previous.Velocity.Magnitude+before.Velocity.Magnitude
+    -- Relative ball/opponent speed decides how far the gap can close within
+    -- the sample age plus latency. The old sum of both speeds doubled the
+    -- allowance when a defender simply ran alongside the handler.
+    local speed = pflat(previous.Velocity-before.Velocity).Magnitude+4
     local threshold = math.max(PICKUP.MinDistance, PICKUP.BaseReach+speed*(age+PICKUP.Latency)+PICKUP.Margin)
     local kind = previous.Holder == self.Player and "steal" or "loose ball"
     if reach <= threshold then

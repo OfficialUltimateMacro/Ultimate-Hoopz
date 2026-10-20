@@ -252,6 +252,10 @@ function Extension:UpdateState(character, humanoid, root)
     else
         local raw, who = self:ReadPossession(character)
         local committed = self.State
+        if committed == "Opponent" and self.Holder and self.GameAction then
+            local action = self:GameAction(self.Holder.Character)
+            if action == "Shooting" or action == "Dunking" then self.OpponentActionAt = now end
+        end
         if raw=="Opponent" and committed=="Own" then
             state,holder=raw,who;self.PendingState=nil
         elseif raw == committed or committed == nil or committed == "Manual" or committed == "Reset" or committed == "Shot" or committed == "Off" then
@@ -263,6 +267,10 @@ function Extension:UpdateState(character, humanoid, root)
             -- A confirmed opponent holder is acted on quickly (steal); a ball
             -- briefly out of our container waits longer (dribble reparent).
             local hold = (committed == "Own" and raw == "Loose") and 0.3 or (raw == "Loose" and 0.25 or 0.12)
+            -- The attacker just shot or dunked: a loose ball is a real
+            -- rebound/block, not a dribble flicker. React at once (benchmark:
+            -- 0.25 s of waiting lost most blocked-dunk rebounds).
+            if raw == "Loose" and committed == "Opponent" and self.OpponentActionAt and now-self.OpponentActionAt < 1.2 then hold = 0.03 end
             if self.PendingState ~= raw then self.PendingState, self.PendingSince = raw, now end
             if now-self.PendingSince >= hold then state, holder = raw, who; self.PendingState = nil
             else state, holder = committed, self.Holder end

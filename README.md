@@ -63,3 +63,24 @@ Copy Auto-play log exports local bounded events, move counts and tactical sample
 
 Local headphones: default off, now with a curved band and round ear cups. Music controls opens a draggable panel with a blank source field, Play/Stop and volume (35% default). The field accepts a Roblox audio ID, a direct MP3/OGG link, or an MP3/OGG file in the executor workspace. Roblox only plays audio an experience may use (same creator, under 6 seconds, or Roblox/licensed catalog), so most uploaded IDs are blocked. Links and files are validated, saved under UltimateMusic/ and played locally through getcustomasset when the executor provides it. These custom client-local cosmetics and audio do not unlock a paid item. Audio must be permitted in the experience. Toggle off or unload removes the cosmetic and stops audio. Respawn reattaches the cosmetic. Module: headphones.lua; regression suite: test_local_headphones.py.
 
+
+## Benchmark
+`bench/` contains a 1v1 benchmark against a scripted AI opponent (honest,
+lockdown and long-range "magger" profiles) on the mock world. See
+`bench/README.md` for the model and results. It is a decision-logic
+benchmark, not a live Hoopz measurement.
+
+- Possession spacing has two phases: the first 4 s after check ball keep the
+  wide 8-stud clearance; after that the route buffer is 5.5 studs and
+  routing prefers progress toward the shot ring, strongly avoiding only
+  steal range (< 7.5 studs). Boxed in, the space reset keeps walking to its
+  chosen exit and falls back to the best on-court slide instead of freezing.
+- A loose ball right after the opponent's shot/dunk is chased at once
+  (no 0.25 s dribble-flicker confirmation).
+- Pickup evidence uses relative ball/opponent speed, base reach 7 and a
+  12-stud minimum, with evidence decay 300 s (window 600 s).
+- Reach strength defaults to 1.
+- Local music: MP3/OGG links (Dropbox/Google Drive/GitHub share links are
+  converted to direct downloads; request() is used when available, with a
+  download cache) or files. Leave the box empty to play every MP3/OGG in the
+  executor's workspace/UltimateMusic folder as a playlist (Prev/Next).

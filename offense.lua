@@ -122,7 +122,7 @@ function Extension:ResetOffense()
     self.RouteDirection, self.RouteHoldUntil = nil, nil
     self.SettlePosition,self.SettleSince=nil,nil
     self.DunkMode, self.DriveUntil, self.DunkingUntil = nil, nil, nil
-    self.Plan, self.EscapeCount, self.NextEscape, self.PossessionStart = nil, 0, nil, nil
+    self.Plan, self.EscapeCount, self.NextEscape, self.PossessionStart, self.ResetPoint = nil, 0, nil, nil, nil
     self.DribbleDecisionUntil=nil
     self.PreparingShot=false
     self.FakeShotStart, self.ForceShot, self.AttackMode = nil, nil, nil
@@ -420,11 +420,18 @@ end
 -- computed first; rays only run for candidates that can still win. The chosen
 -- point is identical to evaluating every candidate fully.
 -- Conservative avatar buffer, not a claim about the game's hidden steal volume.
+function Extension:StrictSpacing()
+    local start=self.PossessionStart
+    return start~=nil and self.Clock-start < (self.StrictTime or 4)
+end
 function Extension:PossessionPathClear(root,point,opponents)
     if not heldBall(self.Player and self.Player.Character) then return true end
     if self.MatchGoal and not self:MatchPosition(point) then self.SpacingReason="exit would leave locked court";return false end
     for _,opponent in ipairs(opponents)do
-        local radius=8+math.min(2,(opponent.Velocity and opponent.Velocity.Magnitude or 0)*0.025)
+        -- Buffer just outside steal reach (~4.5). The old 8-stud buffer only
+        -- allowed retreating from a set defender, so possessions drifted out
+        -- of range until the shot clock (benchmark: honest AI defender).
+        local radius=(self:StrictSpacing() and 8 or (self.PathBuffer or 5.5))+math.min(2,(opponent.Velocity and opponent.Velocity.Magnitude or 0)*0.025)
         for _,position in ipairs({opponent.Position,opponent.Predicted})do
             local start=flat(root.Position-position).Magnitude
             local finish=flat(point-position).Magnitude
@@ -445,6 +452,10 @@ function Extension:ReactiveRoute(root)
     self.NextReactiveScan=self.Clock+0.05
     local reads=self:ReadOpponents(root);self.OpponentReads=reads
     if self:PossessionPathClear(root,self.AutoMovePoint,reads) then return end
+    -- A space-reset exit was already chosen as the best available escape;
+    -- vetoing it again here froze the handler when boxed in.
+    local reset=self.ResetPoint
+    if reset and self.Clock<reset.Until and self.AutoMovePoint==reset.Point then return end
     local reason=self.SpacingReason
     local destination=self.ShotSpot or self.AutoMovePoint
     self.Plan,self.RouteHoldUntil,self.RouteDirection=nil,nil,nil
@@ -467,11 +478,17 @@ function Extension:SteerTo(root, destination, opponents)
     if delta.Magnitude < 0.6 then return nil end
     local length = math.min(8,delta.Magnitude)
     local candidates = {}
-    local spacingWeight = 4
+    -- Progress first: space is wanted up to jumper-safe distance only.
+    -- Two phases (benchmark-tuned): right after check ball the defender is
+    -- closing fast, so keep the old wide spacing; after that progress toward
+    -- the shot ring wins and only steal range (<7.5) is strongly avoided.
+    local strict = self:StrictSpacing()
+    local spacingWeight, spaceWant, spaceHard = 4, 14, 0
+    if not strict then spacingWeight, spaceWant, spaceHard = self.SpaceWeight or 1.5, self.SpaceWant or 10, self.SpaceHard or 7.5 end
     for _, degrees in ipairs({0,-30,30,-60,60,-90,90,-120,120,-150,150,180}) do
         local point = root.Position+rotate(unit(delta),math.rad(degrees))*length
         local space = self:SpaceAt(point,opponents)
-        local cost = flat(destination-point).Magnitude + math.max(0,14-space)*spacingWeight
+        local cost = flat(destination-point).Magnitude + math.max(0,spaceHard-space)*6 + math.max(0,spaceWant-space)*spacingWeight
         for _, opponent in ipairs(opponents) do
             cost = cost + math.max(0,5-segmentDistance(opponent.Predicted,root.Position,point))*5
         end
@@ -876,9 +893,14 @@ end
 -- court and on supported floor. At most once per 1.2 s.
 function Extension:SpaceReset(root, opponents)
     local now=self.Clock
+    -- Keep walking to a chosen reset point (it used to be dropped on the next
+    -- 10 Hz decision, leaving the handler standing still while boxed in).
+    local active=self.ResetPoint
+    if active and now<active.Until and flat(active.Point-root.Position).Magnitude>1 then return active.Point end
+    self.ResetPoint=nil
     self.BlockedSince=self.BlockedSince or now
-    if now-self.BlockedSince<1.5 or now<(self.NextSpaceReset or -100) then return nil end
-    self.NextSpaceReset=now+1.2
+    if now-self.BlockedSince<0.8 or now<(self.NextSpaceReset or -100) then return nil end
+    self.NextSpaceReset=now+0.9
     local nearest,gap=nil,math.huge
     for _,opponent in ipairs(opponents)do
         local d=math.min(flat(opponent.Position-root.Position).Magnitude,flat(opponent.Predicted-root.Position).Magnitude)
@@ -902,9 +924,34 @@ function Extension:SpaceReset(root, opponents)
             if self:PossessionPathClear(root,point,opponents) and self:WalkClear(root.Position,point,params) then
                 self:Log("dribble",string.format("space reset after %.1fs blocked: %d deg, %d studs",now-self.BlockedSince,degrees,length))
                 self.BlockedSince=nil
+                self.ResetPoint={Point=point,Until=now+0.8}
                 return point
             end
         end
+    end
+    -- Fallback: never freeze. Take the walkable exit that best increases the
+    -- distance to the nearest CURRENT defender position (predictions can
+    -- disagree with each other and veto every exit), on the locked court.
+    -- Boxed against the court edge, a sideways slide that keeps the same
+    -- distance still beats standing still.
+    local longBlocked=now-(self.BlockedSince or now)>1.6
+    local best,bestGain=nil,longBlocked and -math.huge or 0.75
+    for _,degrees in ipairs({0,35,-35,70,-70,105,-105,140,-140,180})do
+        local point=root.Position+rotate(away,math.rad(degrees))*6
+        if (not self.MatchGoal or self:MatchPosition(point)) and self:WalkClear(root.Position,point,params) then
+            local before,after=math.huge,math.huge
+            for _,opponent in ipairs(opponents)do
+                before=math.min(before,flat(opponent.Position-root.Position).Magnitude)
+                after=math.min(after,flat(opponent.Position-point).Magnitude)
+            end
+            if after-before>bestGain and (after>=3.5 or not longBlocked) then best,bestGain=point,after-before end
+        end
+    end
+    if best then
+        self:Log("dribble",string.format("space reset fallback: %+.1f studs from nearest defender",bestGain))
+        self.BlockedSince=nil
+        self.ResetPoint={Point=best,Until=now+0.8}
+        return best
     end
     self:Log("dribble","space reset refused: "..tostring(self.SpacingReason))
     return nil

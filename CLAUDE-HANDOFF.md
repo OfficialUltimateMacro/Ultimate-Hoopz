@@ -4,7 +4,7 @@ Current release priorities: situational defense, pressure escape routes, standal
 
 ## Module map
 
-- customizations.lua: startup constants and branding resolution. High arc, ShotDelay0.28, BallMagnetfalse, ReachStrength2.
+- customizations.lua: startup constants and branding resolution. High arc, ShotDelay0.28, BallMagnetfalse, ReachStrength1.
 - extensions.lua: state machine, input ownership, notifications, UI hooks, render movement, bounded diagnostics and Auto Guard lock.
 - offense.lua: cached reads, steering/clearance, ReactiveRoute, camera/shift-lock, dribble selection, ProtectiveIdle, shot/dunk input and result tracking, RiskProfile/ObserveRisk/SyncRisk.
 - match.lua: court and opponent scope, goal labels, manual court correction and predicted loose-ball recovery.
@@ -51,3 +51,10 @@ From a user-supplied Auto-play log (not stored in the repository): possessions b
 - CanTakeShot: a defender within 7 studs blocks a jumper for the first 2.5 s held (live logs showed jumpers stripped mid-routine); after that, contested shots go. The check-ball drill still shoots 4/4.
 - pickup.lua CourtBallSample: held ball wins; a loose part within 7 studs of the holder counts as the same ball; strays are ignored while one is held; multiple loose balls resolve to the tracked/nearest ball (ambiguous only if tied within 6 studs or nearest >30). The regression is in test_pickup_evidence (0b).
 - Live behaviour unverified.
+
+## Benchmark-driven pass
+- bench/ (arena.lua, bench.py, suite.py, README.md): scripted-AI 1v1 benchmark. Profiles honest/lockdown/magger. Previous builds scored ~0 PPP, mostly from shot-clock violations (an 8-stud route buffer plus a 14-stud space cost made the handler retreat).
+- offense.lua: StrictSpacing() covers the first 4 s of a possession (buffer 8, old costs); after that the buffer is 5.5 and SteerTo costs 6/stud below 7.5 and 1.5/stud below 10. SpaceReset: threshold 0.8 s, cadence 0.9 s, persists its ResetPoint (ReactiveRoute does not veto it), and has a fallback to the best on-court exit.
+- extensions.lua UpdateState: OpponentActionAt (Shooting/Dunking seen) means Opponent->Loose confirms in 0.03 s.
+- pickup.lua: relative speed + 4, BaseReach 7, MinDistance 12, Tau 300, Window 600.
+- customizations: ReachStrength 1. headphones.lua: ExecutorFunction lookup (env/getgenv/_G), NormalizeMusicLink, DownloadAudio (request then HttpGet), cache, MusicFolderTracks/NextLocalTrack playlist, Prev/Next buttons.

@@ -1,6 +1,6 @@
 {
-  "sha256": "894f27d39b6545874bad9847256cd53428f515e254360991fbb4858ff8d648a7",
-  "checked_at": "2026-10-19T19:55:31.871389+00:00",
+  "sha256": "942ef6c2e412becc070b6477be640d4f94e6fc08bad4090d0e4c083da054fb12",
+  "checked_at": "2026-10-20T00:12:47.017221+00:00",
   "offline_only": true,
   "live_Hoopz_tested": false,
   "suites": [
@@ -52,7 +52,7 @@
     {
       "suite": "test_local_headphones.py",
       "passed": true,
-      "output": "PASS: local custom visual (curved band, round cups), MP3/OGG link and workspace-file playback via getcustomasset, privacy/missing/unsupported messages, no physics mutation, respawn, ID/volume validation, playback replacement/loading/error, draggable reusable controls, off/stop/unload and stale-callback cleanup"
+      "output": "PASS: local custom visual (curved band, round cups), MP3/OGG link and workspace-file playback via getcustomasset, share-link conversion, request() downloads with cache, UltimateMusic folder playlist with next/wrap, privacy/missing/unsupported messages, no physics mutation, respawn, ID/volume validation, playback replacement/loading/error, draggable reusable controls, off/stop/unload and stale-call"
     },
     {
       "suite": "test_match_context.py",

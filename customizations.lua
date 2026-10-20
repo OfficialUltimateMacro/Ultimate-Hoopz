@@ -4,7 +4,7 @@ local UltimatePreferences = {
     ShotDelay = 0.28, AimbotType = "High", Aimbot = true, AutoGuard = false, BallCheck = true,
     MatchTargetJump = true, AutoPlay = false,
     BallMagnet = false, MagnetStrength = 50,
-    BallReach = true, ReachStrength = 2,
+    BallReach = true, ReachStrength = 1,
     WalkSpeed = 0.01, AntiDrop = true,
     LogoURL = "https://raw.githubusercontent.com/OfficialUltimateMacro/Ultimate-Hoopz/main/assets/ultimate-wordmark.png",
     LogoCache = "Ultimate-wordmark-061784a8.png"
