@@ -84,3 +84,10 @@ benchmark, not a live Hoopz measurement.
   converted to direct downloads; request() is used when available, with a
   download cache) or files. Leave the box empty to play every MP3/OGG in the
   executor's workspace/UltimateMusic folder as a playlist (Prev/Next).
+
+## Auto-play prediction settings
+Auto-play has its own prediction (separate from Auto Guard prediction): prediction (0-600 ms, default 300), adaptive prediction, smoothing, maximum predicted distance, defense close-out spacing (default 4 studs) and contest distance (default 9 studs). Values are clamped; they are not saved across restarts.
+With the conditional rim strategy active, a shooter inside range is still closed out; the deep position is used only while the attacker is out of range.
+
+## Ball tossed up by the opponent
+When the opponent throws the ball up to himself, Auto-play predicts where it lands: it goes for the ball when it gets there first, otherwise it guards the catch point on the rim side. His catch is not treated as a turnover. Shots (Shooting/Dunking action) still use rebound handling.

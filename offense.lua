@@ -242,20 +242,12 @@ function Extension:ReadOpponents(root)
             local character, humanoid, other = characterParts(player)
             if character and math.abs(other.Position.Y-root.Position.Y) < 12
                 and flat(other.Position-root.Position).Magnitude < 90 then
-                local velocity = flat(other.AssemblyLinearVelocity)
-                local previous=self.OpponentMemory[player]
-                local elapsed=previous and self.Clock-previous.Time or 0
-                if elapsed>=0.06 and elapsed<=0.5 then
-                    local measured=flat(other.Position-previous.Position)/elapsed
-                    if measured.Magnitude<=45 then velocity=velocity*0.55+measured*0.45 end
-                end
-                if velocity.Magnitude > 32 then velocity = unit(velocity)*32 end
-                if not previous or elapsed>=0.06 or elapsed<0 then
-                    self.OpponentMemory[player]={Time=self.Clock,Position=other.Position,Velocity=velocity}
-                end
+                local velocity,confidence,reason=self:MotionRead(player,character,other)
+                local offset=self:PredictionOffset(velocity,self:PredictionLead(nil,false),confidence)
                 result[#result+1] = {
-                    Player=player, Position=other.Position, Predicted=other.Position+velocity*0.3,
-                    Velocity=velocity, Airborne=humanoid.FloorMaterial == self.Environment.Enum.Material.Air
+                    Player=player, Position=other.Position, Predicted=self:BoundPredictedPosition(other.Position,offset),
+                    Velocity=velocity, Confidence=confidence, MotionReason=reason,
+                    Airborne=humanoid.FloorMaterial == self.Environment.Enum.Material.Air
                 }
             end
         end

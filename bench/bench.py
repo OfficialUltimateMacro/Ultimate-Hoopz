@@ -20,6 +20,7 @@ BASE = dict(speed=16, delay=0.25, spacing=3.5, stealReach=4.0, steal=0.5, stripR
 PROFILES = {
     'honest':     dict(BASE),
     'lockdown':   dict(BASE, speed=17, delay=0.15, spacing=3.0, steal=0.8, strip=1.6, breakChance=0.15),
+    'tosser':     dict(BASE, toss=0.35),
     'magger':     dict(BASE, spacing=13, pick=18, stripReach=18, strip=2.5, stealReach=18),
 }
 
@@ -31,7 +32,7 @@ def game(build, profile, seed, poss, response=''):
     fixture = (TESTS / 'sim_fixture.lua').read_text(encoding='utf-8')
     lua = (here / 'arena.lua').read_text(encoding='utf-8')
     lua = (lua.replace('FIXTURE', fixture).replace('PROFILE', lua_table(PROFILES[profile]))
-              .replace('TUNE', os.environ.get('TUNE','{}')).replace('SEED', str(seed)).replace('DEBUG', 'true' if os.environ.get('BDEBUG') else 'false').replace('POSS', str(poss))
+              .replace('TUNE', os.environ.get('TUNE','{}')).replace('RIMOVERRIDE', 'true' if os.environ.get('RIM') else 'false').replace('SEED', str(seed)).replace('DEBUG', 'true' if os.environ.get('BDEBUG') else 'false').replace('POSS', str(poss))
               .replace("RESPONSE", repr(response)).replace('SOURCE', '[====[' + src + ']====]'))
     return json.loads(run(lua).decode())
 

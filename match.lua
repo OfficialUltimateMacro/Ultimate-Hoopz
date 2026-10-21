@@ -20,6 +20,7 @@ function Extension:LockMatch(goal)
     goal=goal or self:NearestGoal(root,self.Settings.AutoPlayBasket)
     self.MatchGoal,self.MatchChoice=goal,self.Settings.AutoPlayBasket
     self.MatchOpponent=nil
+    if self.ResetMotionReads then self:ResetMotionReads() end
     self.TurnoverRetreat,self.TurnoverAt=nil,nil
     if self.ResetRisk then self:ResetRisk() end
     self.MatchAnchor=root.Position
@@ -115,6 +116,52 @@ function Extension:LockViewedHoop()
     end
     if best then self:LockMatch(best) else self.ContextReason="Look toward the intended rim, then lock again";self:Log("match",self.ContextReason) end
 end
+-- Opponent tossed the ball to himself (no shot/dunk Action, not landing at
+-- the rim): predict where it comes down and either beat him there or guard
+-- the catch point on the rim side, instead of idling as a "rebound".
+function Extension:TossRead(root,ball)
+    local toss=self.TossFrom
+    if not toss or toss.Shot or not toss.Player or self.Clock-toss.At>4 or not ball then return nil end
+    local _,_,his=characterParts(toss.Player)
+    if not his then return nil end
+    local velocity=ball.AssemblyLinearVelocity or self.Environment.Vector3.new()
+    local gravity=self.Environment.workspace.Gravity or 196.2
+    local height=math.max(0,ball.Position.Y-root.Position.Y)
+    -- Only a ball in the air is a toss; a ball on the floor is a loose ball.
+    if height<3 and velocity.Y<2 then return nil end
+    local t=math.min(3,math.max(0,(velocity.Y+math.sqrt(velocity.Y*velocity.Y+2*gravity*height))/gravity))
+    local land=self.Environment.Vector3.new(ball.Position.X,root.Position.Y,ball.Position.Z)+mflat(velocity)*t
+    local goal=self.MatchGoal
+    if goal and mflat(land-goal.Position).Magnitude<7 then toss.Shot=true;return nil end -- heading at the rim
+    if not self:MatchPosition(land) then return nil end
+    return {Player=toss.Player,Root=his,Land=land,Time=t}
+end
+function Extension:TossStep(root,toss)
+    local here=root.Position
+    local mine=mflat(toss.Land-here).Magnitude/16
+    local his=mflat(toss.Land-toss.Root.Position).Magnitude/16
+    self.DefenseFacing=mflat(toss.Root.Position-here)
+    if self.DefenseFacing.Magnitude>0.01 then self.DefenseFacing=self.DefenseFacing.Unit end
+    if mine+0.15<his and mine<=toss.Time+0.35 then
+        local target=self:SteerTo(root,toss.Land,{}) or toss.Land
+        self.AutoMovePoint=target
+        self.AutoPlayStatus=string.format("Toss: beating him to the ball (%.1fs vs %.1fs)",mine,his)
+        return target
+    end
+    local goal=self.MatchGoal
+    local rim=goal and self.Environment.Vector3.new(goal.Position.X,here.Y,goal.Position.Z) or here
+    local toRim=mflat(rim-toss.Land)
+    local spacing=self.AutoPlayOption and self:AutoPlayOption("AutoPlayDefenseSpacing") or 4
+    local target=toss.Land+(toRim.Magnitude>0.01 and toRim.Unit or self.Environment.Vector3.new())*math.min(spacing,toRim.Magnitude)
+    local note
+    if self.SafeDefenseTarget then target,note=self:SafeDefenseTarget(here,target,toss.Land,self:MakeRayParams()) end
+    if not target then
+        self:StopAutoMove();self.AutoPlayStatus="Toss: catch side blocked, holding";return nil
+    end
+    if mflat(target-here).Magnitude<1 then self:StopAutoMove() else self.AutoMovePoint=target end
+    self.AutoPlayStatus="Toss: cutting off the catch"..(note and (" ("..note..")") or "")
+    return target
+end
 function Extension:RecoveryStep(character,humanoid,root)
     local preferred=self.RecoveryBall or (self.ShotTrack and self.ShotTrack.Ball)
     local ball,best=nil,85
@@ -126,6 +173,8 @@ function Extension:RecoveryStep(character,humanoid,root)
         end
     end
     if not ball then self:StopAutoMove();self.StopReason="no loose ball on locked court";self.AutoPlayStatus="Watching court for rebound";return end
+    local toss=self:TossRead(root,ball)
+    if toss then self.StopReason=nil;self.RecoveryBall=ball;return self:TossStep(root,toss) end
     local velocity=ball.AssemblyLinearVelocity or self.Environment.Vector3.new()
     local gravity=self.Environment.workspace.Gravity or 196.2
     local height=math.max(0,ball.Position.Y-root.Position.Y)
@@ -136,7 +185,9 @@ function Extension:RecoveryStep(character,humanoid,root)
     if not self:MatchPosition(point) then point=self.Environment.Vector3.new(ball.Position.X,root.Position.Y,ball.Position.Z) end
     local params=self:MakeRayParams()
     if not self:HasFloor(point,params) then self:StopAutoMove();self.StopReason="rebound landing point unsupported";return end
-    local target=self:SteerTo(root,point,self:ReadOpponents(root))
+    -- Chasing a loose ball: no spacing avoidance (that steered us away from
+    -- the opponent we have to beat to it); walls/floor are still checked.
+    local target=self:SteerTo(root,point,{})
     self.AutoMovePoint=target
     self.RecoveryTarget,self.RecoveryBall=point,ball
     self.AutoPlayStatus=height>5 and "Rebounding: predicting landing" or "Recovering loose ball"

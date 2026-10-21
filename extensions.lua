@@ -170,6 +170,7 @@ function Extension:SetAutoPlay(enabled)
     enabled = enabled == true
     if self.Settings.AutoPlay == enabled then return end
     self.Settings.AutoPlay = enabled
+    if self.ResetMotionReads then self:ResetMotionReads() end
     if self.AutoPlayToggle and type(self.AutoPlayToggle.SetValue) == "function" then
         pcall(self.AutoPlayToggle.SetValue, enabled)
     end
@@ -281,7 +282,17 @@ function Extension:UpdateState(character, humanoid, root)
         self:Log("state", tostring(self.State).." -> "..state.." ("..tostring(reason)..")")
         self.LastTransition = tostring(self.State).."->"..state.." ("..tostring(reason)..")"
         local was = self.State
-        if state=="Opponent" and (was=="Own" or was=="Shot" or was=="Loose") then
+        -- Ball leaving the opponent's hands: remember who released it and
+        -- whether it was a shot/dunk (Action seen) or a toss to himself.
+        if was=="Opponent" and state=="Loose" then
+            self.TossFrom={Player=self.Holder, At=now, Shot=(self.OpponentActionAt ~= nil and now-self.OpponentActionAt < 1.2)}
+        end
+        -- His own toss caught again is the same possession: keep pressuring
+        -- instead of the turnover retreat to the hoop.
+        local ownToss = state=="Opponent" and was=="Loose" and self.TossFrom and self.TossFrom.Player==holder
+            and not self.TossFrom.Shot and now-self.TossFrom.At < 4
+        if ownToss then self:Log("defense","opponent caught his own toss; staying on him") end
+        if state=="Opponent" and (was=="Own" or was=="Shot" or (was=="Loose" and not ownToss)) then
             self.TurnoverRetreat=true;self.TurnoverAt=now
             if self.ObserveRisk then self:ObserveRisk(holder,"turnover") end
             self:ReleaseDribbleKeys(true)
@@ -505,6 +516,9 @@ function Extension:StatusText()
         "Dribble "..tostring(self.DribbleStatus or "-").." | shield "..tostring(self.ProtectFacing==true).." | setup "..tostring(self.PreparingShot==true),
         "Refused: move "..tostring(self.MoveRefusal or "-").." | route "..tostring(self.SpacingReason or "-"),
         "Defense "..tostring(self.DefenseMode or "-").." vs "..name(self.State=="Opponent" and self.Holder or nil).." | "..tostring(self.DefenseIntent or "-"),
+        "Prediction "..tostring(self:AutoPlayOption("AutoPlayPrediction")).."ms "..(self.Settings.AutoPlayAdaptivePrediction~=false and "adaptive" or "fixed")
+            .." | motion "..tostring(self.LastDefensePrediction and self.LastDefensePrediction.Reason or "-")
+            .." | spacing "..tostring(self:AutoPlayOption("AutoPlayDefenseSpacing")),
         "Strategy "..tostring(self.AdaptiveRimOnly and "CONDITIONAL rim strategy" or "normal").." ("..tostring(self.Settings.AutoPlayMagnetResponse or "Manual confirm")
             ..(self.Settings.AutoPlayRimOverride and ", override" or "")..") | "..tostring(self.AdaptiveReason or "-"),
         "Evidence "..(self.EvidenceSummary and (self:EvidenceSummary()) or "-").." | last "..tostring(self.PickupEvidence and self.PickupEvidence.LastDecision or "-"),
@@ -520,6 +534,7 @@ function Extension:Install(environment, settings)
     -- branch. Rebind to that table without installing a second event loop.
     if self.Installed then
         self.Settings = settings
+        self:InitAutoPlayTuning(settings)
         settings.AimbotKeybind = nil
         settings.AutoGuardJumpMatch = UltimatePreferences.MatchTargetJump
         settings.AutoPlay = false
@@ -536,6 +551,7 @@ function Extension:Install(environment, settings)
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
+    self:InitAutoPlayTuning(settings)
     self.Players = environment.game:GetService("Players")
     self.Player = self.Players.LocalPlayer
     self.Input = environment.game:GetService("UserInputService")
@@ -613,6 +629,7 @@ end
 function Extension:InstallControls(section)
     if self.ControlsInstalled or not self.Settings then return end
     self.ControlsInstalled = true
+    self:InstallPredictionControls(section)
     section:NewToggle({Title = "Match target jump", Default = true, Callback = function(value)
         self.Settings.AutoGuardJumpMatch = value
     end})

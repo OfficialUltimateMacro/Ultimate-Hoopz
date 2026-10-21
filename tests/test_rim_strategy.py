@@ -38,24 +38,33 @@ e:UpdateRimStrategy();assert(e.AdaptiveRimOnly,'override active');e.RimBlockedSi
 e:OffenseStep(F.own.Character,F.oh,F.root)
 assert(not e.DunkMode,'fallback jumper allowed after blocked lane')
 local logged=false;for _,l in ipairs(e.EventLog)do if l:find('rim lane blocked',1,true)then logged=true end end;assert(logged,'fallback logged')
--- R2 defense: normal closes out near the attacker; strategy protects the rim.
+-- R2 defense: normal closes out near the attacker. With the rim strategy on,
+-- an attacker INSIDE shooting range is still closed out (live clip: camping
+-- under the rim gave a shooter open threes every possession).
 s.AutoPlayRimOverride=false
 setup(v(40,3,12),v(50,3,0),'them');frames(240)
 local normalGap=flat(F.root.Position-F.er.Position).Magnitude
 assert(normalGap<=7 and e.DefenseMode~=nil and not tostring(e.DefenseMode):find('Rim strategy'),'normal: close out near attacker ('..normalGap..')')
 s.AutoPlayRimOverride=true;setup(v(40,3,12),v(50,3,0),'them');frames(240)
-local toRim=flat(F.root.Position-rim);local dir=flat(F.er.Position-rim).Unit
-local lateral=(toRim-dir*toRim:Dot(dir)).Magnitude
-assert(toRim.Magnitude<=12 and lateral<2.5 and tostring(e.DefenseMode):find('protect hoop'),'strategy: deep on the attacker-rim line ('..toRim.Magnitude..','..lateral..')')
+local gap=flat(F.root.Position-F.er.Position).Magnitude
+assert(gap<=7 and tostring(e.DefenseMode):find('close out shooter'),'strategy: shooter in range is closed out ('..gap..', '..tostring(e.DefenseMode)..')')
 local face=e.DefenseFacing;local want=flat(F.er.Position-F.root.Position).Unit
 assert(face and face:Dot(want)>0.9,'still faces the attacker')
--- Lateral reaction while camping.
+-- Lateral reaction on the close-out.
 frames(120,function(i)F.er.Position=v(50,3,i*0.15) end)
-toRim=flat(F.root.Position-rim);dir=flat(F.er.Position-rim).Unit
-assert((toRim-dir*toRim:Dot(dir)).Magnitude<3,'camping reacts laterally to the attacker')
--- R3 not forever: attacker lingers far out -> step up.
-setup(v(10,3,0),v(80,3,0),'them');frames(60*7)
-assert(tostring(e.DefenseMode):find('step up') and flat(F.root.Position-rim).Magnitude>20,'steps up when attacker lingers far out')
+local toRim=flat(F.root.Position-rim);local dir=flat(F.er.Position-rim).Unit
+assert((toRim-dir*toRim:Dot(dir)).Magnitude<3,'close-out reacts laterally to the attacker')
+-- R3 attacker beyond shooting range: wait on his line at the range edge
+-- (<= 55 studs from the rim), not under the rim and not glued to him.
+setup(v(10,3,0),v(100,3,0),'them');frames(60*4)
+toRim=flat(F.root.Position-rim)
+assert(tostring(e.DefenseMode):find('range edge') and toRim.Magnitude>=50 and toRim.Magnitude<=58,'waits at the range edge ('..toRim.Magnitude..')')
+-- R3b he walks into range: closed out within about a second.
+local closed,entered
+frames(200,function(i)F.er.Position=v(math.max(66,100-i*0.27),3,0)
+ if not entered and (F.goal.Position-F.er.Position).Magnitude<=80 then entered=i end
+ if entered and not closed and flat(F.root.Position-F.er.Position).Magnitude<=7.5 then closed=i end end)
+assert(entered and closed and closed-entered<=70,'closes out within ~1.2 s of the attacker entering range ('..tostring(entered)..'->'..tostring(closed)..', '..flat(F.root.Position-F.er.Position).Magnitude..')')
 -- R4 attacker inside 20 studs -> normal rim protection/contest, not camping offsets.
 setup(v(10,3,0),v(15,3,0),'them');frames(60)
 assert(not tostring(e.DefenseMode):find('Rim strategy'),'normal rim protection inside 20 studs')
@@ -72,6 +81,6 @@ e.MatchOpponent=F.enemy;e:UpdateRimStrategy();assert(e.AdaptiveRimOnly,'confirme
 local other=F.player(v(30,3,0),'Other');e.MatchOpponent=other;e:UpdateRimStrategy()
 assert(not e.AdaptiveRimOnly,'different opponent: normal strategy')
 e:SetAutoPlay(false)
-return 'PASS: normal jumper vs strategy drive+dunk, bounded blocked-lane fallback, normal close-out vs deep rim protection facing the attacker, lateral camping, step-up, inside-20 normal contest, loose-ball recovery, opponent scoping'
+return 'PASS: normal jumper vs strategy drive+dunk, bounded blocked-lane fallback, shooter in range closed out even under the strategy (facing, lateral), range-edge wait beyond range, close-out within 1.2 s of entering range, inside-20 normal contest, loose-ball recovery, opponent scoping'
 '''
 print(run(lua.replace('FIXTURE',fixture).replace('SOURCE','[====['+source+']====]')).decode())

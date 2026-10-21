@@ -12,6 +12,11 @@ local function dsegment(point, a, b)
     local t = math.max(0, math.min(1, dflat(point-a):Dot(d) / math.max(0.001, d:Dot(d))))
     return dflat(point-(a+d*t)).Magnitude
 end
+local function drotate(v, degrees)
+    local r = math.rad(degrees)
+    local c, s = math.cos(r), math.sin(r)
+    return Extension.Environment.Vector3.new(v.X*c - v.Z*s, 0, v.X*s + v.Z*c)
+end
 function Extension:DefendedGoal(attackerRoot)
     if self.MatchGoal and self.MatchGoal.Parent then
         self.DefenseGoal=self.MatchGoal
@@ -28,7 +33,8 @@ function Extension:DefendedGoal(attackerRoot)
     if current and current.Parent and best ~= current then
         local d = dflat(current.Position-attackerRoot.Position).Magnitude
         -- Sticky: only switch when the other hoop is clearly the attacker's.
-        if d <= 150 and d < bestDistance+25 then return current end
+        -- No eligible alternative (bestDistance nil) keeps the current hoop.
+        if d <= 150 and (not bestDistance or d < bestDistance+25) then return current end
     end
     if best ~= current then
         self.DefenseGoal = best
@@ -42,6 +48,32 @@ function Extension:AttackerRead(attacker, root)
     end
     return nil
 end
+-- Checked defensive route: the straight path must be walkable (no wall hit,
+-- floor at the middle and the end) and stay on the locked court. If it is
+-- not, try up to four rotations of the same spot around the attacker; if all
+-- fail, hold instead of reusing an unchecked stale target. WalkClear costs 5
+-- raycasts, so one decision uses at most 25.
+Extension.DefenseRayBudget = 25
+function Extension:SafeDefenseTarget(here, target, pivot, params)
+    self.DefenseRaycasts = 0
+    if not params then return target, nil end
+    local function ok(point)
+        if self.MatchGoal and self.MatchPosition and not self:MatchPosition(point) then return false end
+        if dflat(point-here).Magnitude < 0.5 then return true end
+        if self.DefenseRaycasts+5 > self.DefenseRayBudget then return false end
+        self.DefenseRaycasts = self.DefenseRaycasts+5
+        return self:WalkClear(here, point, params)
+    end
+    if ok(target) then return target, nil end
+    local arm = dflat(target-pivot)
+    if arm.Magnitude < 0.5 then return nil, "blocked: no detour around the attacker" end
+    for _, degrees in ipairs({25, -25, 50, -50}) do
+        local point = pivot+drotate(arm, degrees)
+        point = Extension.Environment.Vector3.new(point.X, here.Y, point.Z)
+        if ok(point) then return point, string.format("detour %+d deg", degrees) end
+    end
+    return nil, "blocked: holding"
+end
 -- One defensive decision. Returns the movement target (or nil to hold) and
 -- the reason, plus sets DefenseFacing toward the attacker.
 function Extension:DefenseStep(character, humanoid, root, attacker)
@@ -51,18 +83,39 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     local goal = self:DefendedGoal(attackerRoot)
     if not goal then self:StopAutoMove(); self.DefenseIntent = "No basket on the attacker's court"; return nil end
     local read = self:AttackerRead(attacker, root)
-    local velocity = read and read.Velocity or dflat(attackerRoot.AssemblyLinearVelocity)
+    local velocity, confidence, motion
+    if read then
+        velocity, confidence, motion = read.Velocity, read.Confidence or 1, read.MotionReason
+    elseif self.MotionRead then
+        velocity, confidence, motion = self:MotionRead(attacker, attacker.Character, attackerRoot)
+    else
+        velocity, confidence, motion = dflat(attackerRoot.AssemblyLinearVelocity), 1, "physics"
+    end
     if velocity.Magnitude > 32 then velocity = dunit(velocity)*32 end
     local here = root.Position
     local gap = dflat(attackerRoot.Position-here).Magnitude
-    local lead = math.max(0.2, math.min(0.5, 0.2+gap/50))
+    -- Auto-play's own tuning (never Blessed's AutoGuardPrediction). Defaults
+    -- (300 ms, adaptive) reproduce the previous 0.2-0.5 s drive lead and the
+    -- 0.3 s side lead.
+    local lead = self.PredictionLead and self:PredictionLead(gap, true) or math.max(0.2, math.min(0.5, 0.2+gap/50))
+    local sideLead = self.AutoPlayOption and self:AutoPlayOption("AutoPlayPrediction")/1000 or 0.3
+    if self.Settings.AutoPlayAdaptivePrediction == false then sideLead = lead end
+    local closeout = self.AutoPlayOption and self:AutoPlayOption("AutoPlayDefenseSpacing") or 4
+    local contestDistance = self.AutoPlayOption and self:AutoPlayOption("AutoPlayContestDistance") or 9
     local rim = self.Environment.Vector3.new(goal.Position.X, here.Y, goal.Position.Z)
     -- Lead drives toward the rim fully; side-to-side crossovers only a
     -- little, enough to offset our slower lateral speed without overshooting.
     local axis = dunit(dflat(rim-attackerRoot.Position))
     local driveVelocity = axis*math.max(0, velocity:Dot(axis))
     local sideVelocity = velocity-axis*velocity:Dot(axis)
-    local predicted = attackerRoot.Position+driveVelocity*lead+sideVelocity*0.3
+    local offset = driveVelocity*lead+sideVelocity*sideLead
+    -- Defense keeps the full lead unless the read was reset (confidence 0):
+    -- scaling it down on direction changes let drives past in the benchmark
+    -- (lockdown profile: 1.50 vs 1.41 points allowed per possession).
+    if self.PredictionOffset then offset = self:PredictionOffset(offset, 1, (confidence or 0) > 0 and 1 or 0) end
+    local predicted = self.BoundPredictedPosition and self:BoundPredictedPosition(attackerRoot.Position, offset)
+        or attackerRoot.Position+offset
+    self.LastDefensePrediction = {Reason=motion, Lead=lead, SideLead=sideLead, Confidence=confidence, Offset=offset.Magnitude}
     local attackerFlat = self.Environment.Vector3.new(predicted.X, here.Y, predicted.Z)
     local toRim = dflat(rim-attackerFlat)
     local rimDistance = toRim.Magnitude
@@ -75,17 +128,16 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     local mode, spacing
     if self.TurnoverRetreat and (along>3 or rimDistance<10 or self.Clock-(self.TurnoverAt or self.Clock)>2.5) then self.TurnoverRetreat=nil end
     local camping = self.AdaptiveRimOnly == true
-    if camping and rimDistance > 55 then self.CampFarSince = self.CampFarSince or self.Clock else self.CampFarSince = nil end
-    if camping and rimDistance >= 20 then
-        -- Conditional rim strategy: stay deep on the attacker-rim line and
-        -- react laterally; step up when the attacker lingers far out, and
-        -- use normal rim protection/contests once he comes inside 20 studs.
-        local deep = math.min(9, rimDistance*0.5)
-        if self.CampFarSince and self.Clock-self.CampFarSince > 6 then
-            mode = "Rim strategy: step up"
-            deep = math.min(rimDistance-12, 25)
-        else mode = "Rim strategy: protect hoop" end
-        spacing = math.max(0.5, rimDistance-deep)
+    self.CampFarSince = nil
+    if camping and not shooterRange then
+        -- Conditional rim strategy, attacker OUT of shooting range: wait on
+        -- the attacker-rim line just inside his range edge (<= 55 studs from
+        -- the rim) so a close-out takes under a second. Live clip: camping
+        -- 9 studs from the rim gave a shooter open threes every possession,
+        -- so inside his range the normal close-out below applies.
+        mode = "Rim strategy: wait at range edge"
+        local stand = math.max(9, math.min(55, rimDistance-14))
+        spacing = math.max(0.5, rimDistance-stand)
     elseif self.TurnoverRetreat and along<3 then
         mode="Transition: protect hoop"
         spacing=math.max(4,rimDistance-10)
@@ -99,11 +151,11 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
         mode = "Protect rim"
         spacing = math.max(2.5, math.min(6, rimDistance*0.35))
     elseif shooterRange then
-        mode = "Close out"
-        spacing = 4
+        mode = camping and "Rim strategy: close out shooter" or "Close out"
+        spacing = closeout
     else
         mode = "Contain"
-        spacing = 6
+        spacing = closeout+2
     end
     spacing = math.min(spacing, math.max(0.5, rimDistance-1))
     local target = attackerFlat+direction*spacing
@@ -119,23 +171,30 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     if dflat(target-rim).Magnitude > dflat(attackerFlat-rim).Magnitude+2 then
         target = attackerFlat+direction*math.max(spacing, 2)
     end
-    local params = self:MakeRayParams()
-    if params and not self:HasFloor(target, params) then
-        target = self.LastDefenseTarget or here
-    end
-    self.LastDefenseTarget = target
-    self.DefenseFacing = dunit(dflat(attackerRoot.Position-here))
     self.DefenseGoalPosition = rim
     -- Contest only real shots/dunks or a rising jump close in front.
     local attackerAction = self.GameAction and self:GameAction(attacker.Character)
     local rising = attackerHumanoid.FloorMaterial == self.Environment.Enum.Material.Air
         and attackerRoot.AssemblyLinearVelocity.Y > 8
-    if (attackerAction == "Shooting" or attackerAction == "Dunking" or rising) and gap < 9 and along > -1
+    if (attackerAction == "Shooting" or attackerAction == "Dunking" or rising) and gap < contestDistance and along > -1
         and humanoid.FloorMaterial ~= self.Environment.Enum.Material.Air and self.Clock-self.LastJump >= 0.6 then
         humanoid.Jump, self.LastJump = true, self.Clock
         self.ContestCount = (self.ContestCount or 0)+1
         if self.Log then self:Log("defense", "contest jump ("..tostring(attackerAction or "rising")..")") end
     end
+    local params = self:MakeRayParams()
+    local routeNote
+    target, routeNote = self:SafeDefenseTarget(here, target, attackerFlat, params)
+    self.DefenseRoute = routeNote
+    self.DefenseFacing = dunit(dflat(attackerRoot.Position-here))
+    if not target then
+        self.LastDefenseTarget = nil
+        self.DefenseMode = mode
+        self:StopAutoMove()
+        self.DefenseIntent = mode..": "..routeNote
+        return nil
+    end
+    self.LastDefenseTarget = target
     self.DefenseMode = mode
     if dflat(target-here).Magnitude < 1 then
         self:StopAutoMove()

@@ -52,3 +52,7 @@ confirmed cheating.
 
 These numbers measure decision logic against fixed scripted behaviour only.
 They are not live Hoopz results.
+
+## Added profiles/options
+- `tosser`: honest AI that, when blocked on a drive or pressed, tosses the ball up past the defender (58 studs/s up, about 15 studs forward/sideways) and runs to catch it.
+- `RIM=1` environment variable forces the conditional rim strategy (override) for the Ultimate build being tested.

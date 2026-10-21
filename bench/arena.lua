@@ -13,6 +13,7 @@ e:Install(F.env,s)
 for k,x in pairs(TUNE) do e[k]=x end
 e.InputCaptures={[2]={Notification=function()return {new=function(t)notes[#notes+1]=t end} end}}
 if RESPONSE~='' then s.AutoPlayMagnetResponse=RESPONSE end
+if RIMOVERRIDE then s.AutoPlayRimOverride=true end
 local own,enemy,root,er,oh,eh=F.own,F.enemy,F.root,F.er,F.oh,F.eh
 local goal=F.goal
 local dt=1/60
@@ -30,6 +31,7 @@ for _,k in ipairs({'us','them'})do
  M[k]={poss=0,pts=0,jA=0,jRel=0,jMade=0,stripped=0,dA=0,dMade=0,dBlocked=0,stolen=0,clock=0,oreb=0,dreb=0,looseLost=0,threes=0,twos=0}
 end
 local hold,offense='none','us'
+local tossBall=nil
 local loose,looseAt,flight=nil,0,nil
 local wind={}          -- wind.us / wind.them: {t,len,dist}
 local dunk={}          -- dunk.us / dunk.them: {t,from}
@@ -62,7 +64,7 @@ local function newPossession(who)
  local o=rim+dir*99;local d=rim+dir*81
  if who=='us' then root.Position=o;er.Position=d else er.Position=o;root.Position=d end
  root.AssemblyLinearVelocity=v();er.AssemblyLinearVelocity=v();oh.point=nil
- clearBalls();flight=nil;wind={};dunk={};ourAttr.Action=nil;theirAttr.Action=nil
+ clearBalls();flight=nil;tossBall=nil;wind={};dunk={};ourAttr.Action=nil;theirAttr.Action=nil
  setHold(who);shotStart=now;checkUntil=now+0.5;hist={}
  local sa=a+(rnd()-0.5)*0.5;aiPlan={spot=rim+v(math.cos(sa),0,math.sin(sa))*62,drive=false,next=0}
 end
@@ -144,6 +146,10 @@ local function aiOffense()
  local held=now-shotStart
  local gap=fd(er.Position,root.Position)
  local between=segd(root.Position,er.Position,rim)<4 and fd(root.Position,rim)<fd(er.Position,rim)
+ if aiPlan.drive and (P.toss or 0)>0 and not aiPlan.tossed and between and gap<10 and fd(er.Position,rim)>20 and now>=aiPlan.next then
+  aiPlan.next=now+0.25
+  if rnd()<P.toss then aiPlan.drive=false;aiPlan.forceToss=true end
+ end
  if aiPlan.drive then
   aiMoveTo(rim)
   if fd(er.Position,rim)<=8 then startDunk('them') end
@@ -152,7 +158,15 @@ local function aiOffense()
  local dm=aiMoveTo(aiPlan.spot)
  if now>=aiPlan.next then
   aiPlan.next=now+0.25
-  if fd(er.Position,rim)<=72 and (gap>=P.shootGap or held>P.patience) and dm<3 then
+  if (P.toss or 0)>0 and not aiPlan.tossed and (aiPlan.forceToss or (gap<6 and rnd()<P.toss)) then
+   aiPlan.forceToss=nil;aiPlan.drive=true
+   aiPlan.tossed=true
+   local dir=flat(rim-er.Position).Unit;local lat=v(-dir.Z,0,dir.X)*((rnd()<0.5) and -1 or 1)
+   local hv=dir*12+lat*10
+   placeLoose(er.Position+v(0,4,0));tossBall={vel=v(hv.X,58,hv.Z)};loose.AssemblyLinearVelocity=tossBall.vel
+   local t=(58+math.sqrt(58*58+2*196.2*4))/196.2;aiPlan.catch=er.Position+hv*t;M.them.tosses=(M.them.tosses or 0)+1
+   log('them toss')
+  elseif fd(er.Position,rim)<=72 and (gap>=P.shootGap or held>P.patience) and dm<3 then
    wind.them={t=0,len=0.4,dist=fd(goal.Position,er.Position)};theirAttr.Action='Shooting';M.them.jA=M.them.jA+1
   elseif not between and fd(er.Position,rim)<75 and rnd()<P.driveBias then aiPlan.drive=true
   elseif dm<3 and rnd()<0.35 then
@@ -163,6 +177,7 @@ local function aiOffense()
 end
 local function aiChaseLoose()
  if not loose then return end
+ if tossBall and aiPlan.catch then aiMoveTo(aiPlan.catch);return end
  if now-looseAt<P.delay then return end
  aiMoveTo(loose.Position)
 end
@@ -243,8 +258,19 @@ while M.us.poss+M.them.poss<=total and frames<60*60*30 do
    end
   end
  end
+ -- tossed ball in flight (AI self-pass)
+ if tossBall and loose and hold=='loose' then
+  local tv=tossBall.vel;tv=v(tv.X,tv.Y-196.2*dt,tv.Z);tossBall.vel=tv
+  loose.Position=loose.Position+tv*dt
+  if loose.Position.Y<=3 then loose.Position=v(loose.Position.X,3,loose.Position.Z);tossBall.vel=v() end
+  loose.AssemblyLinearVelocity=tossBall.vel
+  if loose.Position.Y<6 then
+   if fd(root.Position,loose.Position)<=3 then tossBall=nil;M.us.tossSteals=(M.us.tossSteals or 0)+1;log('us intercept toss');changePossession('us',true)
+   elseif fd(er.Position,loose.Position)<=3 then tossBall=nil;aiPlan.catch=nil;setHold('them');log('them catch toss') end
+  end
+ end
  -- loose ball pickups
- if hold=='loose' and loose then
+ if hold=='loose' and loose and not tossBall then
   local du,dt2=fd(root.Position,loose.Position),fd(er.Position,loose.Position)
   local shooter=flight and flight.k
   local winner

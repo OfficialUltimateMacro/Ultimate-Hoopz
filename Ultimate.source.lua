@@ -274,6 +274,7 @@ function Extension:SetAutoPlay(enabled)
     enabled = enabled == true
     if self.Settings.AutoPlay == enabled then return end
     self.Settings.AutoPlay = enabled
+    if self.ResetMotionReads then self:ResetMotionReads() end
     if self.AutoPlayToggle and type(self.AutoPlayToggle.SetValue) == "function" then
         pcall(self.AutoPlayToggle.SetValue, enabled)
     end
@@ -385,7 +386,17 @@ function Extension:UpdateState(character, humanoid, root)
         self:Log("state", tostring(self.State).." -> "..state.." ("..tostring(reason)..")")
         self.LastTransition = tostring(self.State).."->"..state.." ("..tostring(reason)..")"
         local was = self.State
-        if state=="Opponent" and (was=="Own" or was=="Shot" or was=="Loose") then
+        -- Ball leaving the opponent's hands: remember who released it and
+        -- whether it was a shot/dunk (Action seen) or a toss to himself.
+        if was=="Opponent" and state=="Loose" then
+            self.TossFrom={Player=self.Holder, At=now, Shot=(self.OpponentActionAt ~= nil and now-self.OpponentActionAt < 1.2)}
+        end
+        -- His own toss caught again is the same possession: keep pressuring
+        -- instead of the turnover retreat to the hoop.
+        local ownToss = state=="Opponent" and was=="Loose" and self.TossFrom and self.TossFrom.Player==holder
+            and not self.TossFrom.Shot and now-self.TossFrom.At < 4
+        if ownToss then self:Log("defense","opponent caught his own toss; staying on him") end
+        if state=="Opponent" and (was=="Own" or was=="Shot" or (was=="Loose" and not ownToss)) then
             self.TurnoverRetreat=true;self.TurnoverAt=now
             if self.ObserveRisk then self:ObserveRisk(holder,"turnover") end
             self:ReleaseDribbleKeys(true)
@@ -609,6 +620,9 @@ function Extension:StatusText()
         "Dribble "..tostring(self.DribbleStatus or "-").." | shield "..tostring(self.ProtectFacing==true).." | setup "..tostring(self.PreparingShot==true),
         "Refused: move "..tostring(self.MoveRefusal or "-").." | route "..tostring(self.SpacingReason or "-"),
         "Defense "..tostring(self.DefenseMode or "-").." vs "..name(self.State=="Opponent" and self.Holder or nil).." | "..tostring(self.DefenseIntent or "-"),
+        "Prediction "..tostring(self:AutoPlayOption("AutoPlayPrediction")).."ms "..(self.Settings.AutoPlayAdaptivePrediction~=false and "adaptive" or "fixed")
+            .." | motion "..tostring(self.LastDefensePrediction and self.LastDefensePrediction.Reason or "-")
+            .." | spacing "..tostring(self:AutoPlayOption("AutoPlayDefenseSpacing")),
         "Strategy "..tostring(self.AdaptiveRimOnly and "CONDITIONAL rim strategy" or "normal").." ("..tostring(self.Settings.AutoPlayMagnetResponse or "Manual confirm")
             ..(self.Settings.AutoPlayRimOverride and ", override" or "")..") | "..tostring(self.AdaptiveReason or "-"),
         "Evidence "..(self.EvidenceSummary and (self:EvidenceSummary()) or "-").." | last "..tostring(self.PickupEvidence and self.PickupEvidence.LastDecision or "-"),
@@ -624,6 +638,7 @@ function Extension:Install(environment, settings)
     -- branch. Rebind to that table without installing a second event loop.
     if self.Installed then
         self.Settings = settings
+        self:InitAutoPlayTuning(settings)
         settings.AimbotKeybind = nil
         settings.AutoGuardJumpMatch = UltimatePreferences.MatchTargetJump
         settings.AutoPlay = false
@@ -640,6 +655,7 @@ function Extension:Install(environment, settings)
         return
     end
     self.Installed, self.Environment, self.Settings = true, environment, settings
+    self:InitAutoPlayTuning(settings)
     self.Players = environment.game:GetService("Players")
     self.Player = self.Players.LocalPlayer
     self.Input = environment.game:GetService("UserInputService")
@@ -717,6 +733,7 @@ end
 function Extension:InstallControls(section)
     if self.ControlsInstalled or not self.Settings then return end
     self.ControlsInstalled = true
+    self:InstallPredictionControls(section)
     section:NewToggle({Title = "Match target jump", Default = true, Callback = function(value)
         self.Settings.AutoGuardJumpMatch = value
     end})
@@ -968,6 +985,148 @@ local function observeUltimateRoot(environment, registers, pc)
     if pc == 1213 and Extension.Installed then Extension:InstallControls(registers[23]) end
 end
 
+-- Auto-play tuning is deliberately separate from Blessed's AutoGuardPrediction.
+-- Uses observed positions/physics velocity only; not knowledge of future input.
+local tuning = {
+    {Key="AutoPlayPrediction", Title="Auto-play prediction", Default=300, Min=0, Max=600, Step=10, Suffix=" ms"},
+    {Key="AutoPlayPredictionSmoothing", Title="Prediction smoothing", Default=35, Min=0, Max=100, Step=1, Suffix="%"},
+    {Key="AutoPlayMaxLead", Title="Maximum predicted distance", Default=12, Min=2, Max=18, Step=0.5, Suffix=" studs"},
+    {Key="AutoPlayDefenseSpacing", Title="Defense close-out spacing", Default=4, Min=2, Max=10, Step=0.5, Suffix=" studs"},
+    {Key="AutoPlayContestDistance", Title="Auto-play contest distance", Default=9, Min=4, Max=12, Step=0.5, Suffix=" studs"},
+}
+local function finite(n) return type(n)=="number" and n==n and n~=math.huge and n~=-math.huge end
+local function bounded(value, default, low, high)
+    local number=tonumber(value)
+    if not finite(number) then number=default end
+    return math.max(low,math.min(high,number))
+end
+local function pflat(self, vector) return self.Environment.Vector3.new(vector.X,0,vector.Z) end
+local function validVector(v) return v and finite(v.X) and finite(v.Y) and finite(v.Z) end
+local function limitVelocity(self, velocity)
+    local speed=velocity.Magnitude
+    return speed>32 and velocity*(32/speed) or velocity
+end
+function Extension:AutoPlayOption(key)
+    for _, option in ipairs(tuning) do
+        if option.Key==key then return bounded(self.Settings and self.Settings[key],option.Default,option.Min,option.Max) end
+    end
+end
+function Extension:InitAutoPlayTuning(settings)
+    for _, option in ipairs(tuning) do settings[option.Key]=bounded(settings[option.Key],option.Default,option.Min,option.Max) end
+    if type(settings.AutoPlayAdaptivePrediction)~="boolean" then settings.AutoPlayAdaptivePrediction=true end
+end
+function Extension:SetAutoPlayOption(key,value)
+    if not self.Settings then return end
+    for _, option in ipairs(tuning) do
+        if option.Key==key then
+            self.Settings[key]=bounded(value,option.Default,option.Min,option.Max)
+            return self.Settings[key]
+        end
+    end
+end
+function Extension:InstallPredictionControls(section)
+    self:InitAutoPlayTuning(self.Settings)
+    section:NewToggle({Title="Adaptive Auto-play prediction",Default=self.Settings.AutoPlayAdaptivePrediction,Callback=function(value)
+        self.Settings.AutoPlayAdaptivePrediction=value==true
+    end})
+    -- Real recovered UI supports NewSlider with Min/Max/Step/Default/Callback. Older mock/minimal
+    -- sections may not; lack of a widget must not break start/stop controls.
+    if type(section.NewSlider)=="function" then
+        for _, definition in ipairs(tuning) do
+            local option=definition
+            -- Blessed's recovered slider errors on a string Suffix (startup harness:
+            -- 'attempt to sub a string with a number'), so the unit goes in the title.
+            section:NewSlider({Title=option.Title.." ("..option.Suffix:gsub("^%s+","")..")",Min=option.Min,Max=option.Max,Step=option.Step,
+                Default=self:AutoPlayOption(option.Key),Callback=function(value) self:SetAutoPlayOption(option.Key,value) end})
+        end
+    end
+end
+function Extension:ResetMotionReads()
+    self.OpponentMemory=setmetatable({},{__mode="k"})
+    self.LastDefensePrediction=nil
+end
+function Extension:MotionRead(player,character,part)
+    self.OpponentMemory=self.OpponentMemory or setmetatable({},{__mode="k"})
+    local previous=self.OpponentMemory[player]
+    local now=self.Clock
+    local position,raw=part.Position,part.AssemblyLinearVelocity
+    local zero=self.Environment.Vector3.new(0,0,0)
+    if not finite(now) or not validVector(position) or not validVector(raw) then
+        self.OpponentMemory[player]=nil
+        return zero,0,"invalid motion"
+    end
+    raw=pflat(self,raw)
+    if previous and previous.Character==character and previous.Root==part and previous.LastRead==now
+        and (position-previous.LastPosition).Magnitude<0.001 and (raw-previous.Raw).Magnitude<0.001 then
+        return previous.Velocity,previous.Confidence,previous.Reason
+    end
+    local elapsed=previous and now-previous.Time or 0
+    local frameTime=previous and now-previous.LastRead or 0
+    local reset=previous and (previous.Character~=character or previous.Root~=part or elapsed<0 or elapsed>0.5)
+    local displacement=previous and pflat(self,position-previous.Position) or zero
+    local teleported=previous and elapsed>=0 and elapsed<=0.5 and displacement.Magnitude>math.max(10,45*elapsed+2)
+    local velocity,confidence,reason=raw,1,"physics"
+    if reset or teleported then
+        velocity,confidence,reason=zero,0,teleported and "position reset" or "stale/new character"
+    elseif previous then
+        local stopped=raw.Magnitude<0.75
+        local turned=raw.Magnitude>3 and previous.Raw.Magnitude>3
+            and raw:Dot(previous.Raw)<-0.2*raw.Magnitude*previous.Raw.Magnitude
+        local started=raw.Magnitude>6 and previous.Velocity.Magnitude<1.5
+        if stopped then
+            velocity,reason=zero,"stopped"
+        elseif started then
+            -- Restart from a stop: smoothing toward the old zero velocity
+            -- lagged (synthetic stop-and-go error +20%); trust physics.
+            velocity,confidence,reason=raw,0.8,"start"
+        elseif turned then
+            -- Do not average a new crossover with old opposite-direction motion.
+            velocity,confidence,reason=raw,0.4,"direction change"
+        else
+            if elapsed>=0.06 and elapsed<=0.5 then
+                local measured=displacement/elapsed
+                if measured.Magnitude<=45 then velocity=raw*0.55+measured*0.45;reason="position + physics" end
+            end
+            if frameTime>0 and frameTime<=0.5 then
+                local timeConstant=self:AutoPlayOption("AutoPlayPredictionSmoothing")/100*0.18
+                local alpha=frameTime/(frameTime+timeConstant)
+                velocity=previous.Velocity*(1-alpha)+velocity*alpha
+            end
+        end
+    end
+    velocity=limitVelocity(self,velocity)
+    local sampleTime,samplePosition=now,position
+    if previous and not reset and not teleported and elapsed<0.06 then sampleTime,samplePosition=previous.Time,previous.Position end
+    self.OpponentMemory[player]={Character=character,Root=part,Time=sampleTime,Position=samplePosition,
+        LastRead=now,LastPosition=position,Raw=raw,Velocity=velocity,Confidence=confidence,Reason=reason}
+    return velocity,confidence,reason
+end
+function Extension:PredictionLead(gap,defensive)
+    local base=self:AutoPlayOption("AutoPlayPrediction")/1000
+    if defensive and self.Settings.AutoPlayAdaptivePrediction~=false then
+        return math.min(0.6,base/0.3*math.max(0.2,math.min(0.5,0.2+(gap or 0)/50)))
+    end
+    return base
+end
+function Extension:PredictionOffset(velocity,lead,confidence)
+    local factor=self.Settings.AutoPlayAdaptivePrediction~=false and (confidence or 1) or (confidence==0 and 0 or 1)
+    local offset=pflat(self,velocity)*lead*factor
+    local cap=self:AutoPlayOption("AutoPlayMaxLead")
+    if offset.Magnitude>cap then offset=offset*(cap/offset.Magnitude) end
+    return offset
+end
+function Extension:BoundPredictedPosition(position,offset)
+    local target=position+offset
+    if self.MatchPosition then
+        for _=1,4 do
+            if self:MatchPosition(target) then return target end
+            offset=offset*0.5;target=position+offset
+        end
+        return position
+    end
+    return target
+end
+
 -- Experimental possession planner. Reads current replicated positions/velocities;
 -- it does not know opponents' future inputs or the game's court/team rules.
 local function flat(v) return Extension.Environment.Vector3.new(v.X, 0, v.Z) end
@@ -1212,20 +1371,12 @@ function Extension:ReadOpponents(root)
             local character, humanoid, other = characterParts(player)
             if character and math.abs(other.Position.Y-root.Position.Y) < 12
                 and flat(other.Position-root.Position).Magnitude < 90 then
-                local velocity = flat(other.AssemblyLinearVelocity)
-                local previous=self.OpponentMemory[player]
-                local elapsed=previous and self.Clock-previous.Time or 0
-                if elapsed>=0.06 and elapsed<=0.5 then
-                    local measured=flat(other.Position-previous.Position)/elapsed
-                    if measured.Magnitude<=45 then velocity=velocity*0.55+measured*0.45 end
-                end
-                if velocity.Magnitude > 32 then velocity = unit(velocity)*32 end
-                if not previous or elapsed>=0.06 or elapsed<0 then
-                    self.OpponentMemory[player]={Time=self.Clock,Position=other.Position,Velocity=velocity}
-                end
+                local velocity,confidence,reason=self:MotionRead(player,character,other)
+                local offset=self:PredictionOffset(velocity,self:PredictionLead(nil,false),confidence)
                 result[#result+1] = {
-                    Player=player, Position=other.Position, Predicted=other.Position+velocity*0.3,
-                    Velocity=velocity, Airborne=humanoid.FloorMaterial == self.Environment.Enum.Material.Air
+                    Player=player, Position=other.Position, Predicted=self:BoundPredictedPosition(other.Position,offset),
+                    Velocity=velocity, Confidence=confidence, MotionReason=reason,
+                    Airborne=humanoid.FloorMaterial == self.Environment.Enum.Material.Air
                 }
             end
         end
@@ -2272,6 +2423,7 @@ function Extension:LockMatch(goal)
     goal=goal or self:NearestGoal(root,self.Settings.AutoPlayBasket)
     self.MatchGoal,self.MatchChoice=goal,self.Settings.AutoPlayBasket
     self.MatchOpponent=nil
+    if self.ResetMotionReads then self:ResetMotionReads() end
     self.TurnoverRetreat,self.TurnoverAt=nil,nil
     if self.ResetRisk then self:ResetRisk() end
     self.MatchAnchor=root.Position
@@ -2367,6 +2519,52 @@ function Extension:LockViewedHoop()
     end
     if best then self:LockMatch(best) else self.ContextReason="Look toward the intended rim, then lock again";self:Log("match",self.ContextReason) end
 end
+-- Opponent tossed the ball to himself (no shot/dunk Action, not landing at
+-- the rim): predict where it comes down and either beat him there or guard
+-- the catch point on the rim side, instead of idling as a "rebound".
+function Extension:TossRead(root,ball)
+    local toss=self.TossFrom
+    if not toss or toss.Shot or not toss.Player or self.Clock-toss.At>4 or not ball then return nil end
+    local _,_,his=characterParts(toss.Player)
+    if not his then return nil end
+    local velocity=ball.AssemblyLinearVelocity or self.Environment.Vector3.new()
+    local gravity=self.Environment.workspace.Gravity or 196.2
+    local height=math.max(0,ball.Position.Y-root.Position.Y)
+    -- Only a ball in the air is a toss; a ball on the floor is a loose ball.
+    if height<3 and velocity.Y<2 then return nil end
+    local t=math.min(3,math.max(0,(velocity.Y+math.sqrt(velocity.Y*velocity.Y+2*gravity*height))/gravity))
+    local land=self.Environment.Vector3.new(ball.Position.X,root.Position.Y,ball.Position.Z)+mflat(velocity)*t
+    local goal=self.MatchGoal
+    if goal and mflat(land-goal.Position).Magnitude<7 then toss.Shot=true;return nil end -- heading at the rim
+    if not self:MatchPosition(land) then return nil end
+    return {Player=toss.Player,Root=his,Land=land,Time=t}
+end
+function Extension:TossStep(root,toss)
+    local here=root.Position
+    local mine=mflat(toss.Land-here).Magnitude/16
+    local his=mflat(toss.Land-toss.Root.Position).Magnitude/16
+    self.DefenseFacing=mflat(toss.Root.Position-here)
+    if self.DefenseFacing.Magnitude>0.01 then self.DefenseFacing=self.DefenseFacing.Unit end
+    if mine+0.15<his and mine<=toss.Time+0.35 then
+        local target=self:SteerTo(root,toss.Land,{}) or toss.Land
+        self.AutoMovePoint=target
+        self.AutoPlayStatus=string.format("Toss: beating him to the ball (%.1fs vs %.1fs)",mine,his)
+        return target
+    end
+    local goal=self.MatchGoal
+    local rim=goal and self.Environment.Vector3.new(goal.Position.X,here.Y,goal.Position.Z) or here
+    local toRim=mflat(rim-toss.Land)
+    local spacing=self.AutoPlayOption and self:AutoPlayOption("AutoPlayDefenseSpacing") or 4
+    local target=toss.Land+(toRim.Magnitude>0.01 and toRim.Unit or self.Environment.Vector3.new())*math.min(spacing,toRim.Magnitude)
+    local note
+    if self.SafeDefenseTarget then target,note=self:SafeDefenseTarget(here,target,toss.Land,self:MakeRayParams()) end
+    if not target then
+        self:StopAutoMove();self.AutoPlayStatus="Toss: catch side blocked, holding";return nil
+    end
+    if mflat(target-here).Magnitude<1 then self:StopAutoMove() else self.AutoMovePoint=target end
+    self.AutoPlayStatus="Toss: cutting off the catch"..(note and (" ("..note..")") or "")
+    return target
+end
 function Extension:RecoveryStep(character,humanoid,root)
     local preferred=self.RecoveryBall or (self.ShotTrack and self.ShotTrack.Ball)
     local ball,best=nil,85
@@ -2378,6 +2576,8 @@ function Extension:RecoveryStep(character,humanoid,root)
         end
     end
     if not ball then self:StopAutoMove();self.StopReason="no loose ball on locked court";self.AutoPlayStatus="Watching court for rebound";return end
+    local toss=self:TossRead(root,ball)
+    if toss then self.StopReason=nil;self.RecoveryBall=ball;return self:TossStep(root,toss) end
     local velocity=ball.AssemblyLinearVelocity or self.Environment.Vector3.new()
     local gravity=self.Environment.workspace.Gravity or 196.2
     local height=math.max(0,ball.Position.Y-root.Position.Y)
@@ -2388,7 +2588,9 @@ function Extension:RecoveryStep(character,humanoid,root)
     if not self:MatchPosition(point) then point=self.Environment.Vector3.new(ball.Position.X,root.Position.Y,ball.Position.Z) end
     local params=self:MakeRayParams()
     if not self:HasFloor(point,params) then self:StopAutoMove();self.StopReason="rebound landing point unsupported";return end
-    local target=self:SteerTo(root,point,self:ReadOpponents(root))
+    -- Chasing a loose ball: no spacing avoidance (that steered us away from
+    -- the opponent we have to beat to it); walls/floor are still checked.
+    local target=self:SteerTo(root,point,{})
     self.AutoMovePoint=target
     self.RecoveryTarget,self.RecoveryBall=point,ball
     self.AutoPlayStatus=height>5 and "Rebounding: predicting landing" or "Recovering loose ball"
@@ -2720,6 +2922,11 @@ local function dsegment(point, a, b)
     local t = math.max(0, math.min(1, dflat(point-a):Dot(d) / math.max(0.001, d:Dot(d))))
     return dflat(point-(a+d*t)).Magnitude
 end
+local function drotate(v, degrees)
+    local r = math.rad(degrees)
+    local c, s = math.cos(r), math.sin(r)
+    return Extension.Environment.Vector3.new(v.X*c - v.Z*s, 0, v.X*s + v.Z*c)
+end
 function Extension:DefendedGoal(attackerRoot)
     if self.MatchGoal and self.MatchGoal.Parent then
         self.DefenseGoal=self.MatchGoal
@@ -2736,7 +2943,8 @@ function Extension:DefendedGoal(attackerRoot)
     if current and current.Parent and best ~= current then
         local d = dflat(current.Position-attackerRoot.Position).Magnitude
         -- Sticky: only switch when the other hoop is clearly the attacker's.
-        if d <= 150 and d < bestDistance+25 then return current end
+        -- No eligible alternative (bestDistance nil) keeps the current hoop.
+        if d <= 150 and (not bestDistance or d < bestDistance+25) then return current end
     end
     if best ~= current then
         self.DefenseGoal = best
@@ -2750,6 +2958,32 @@ function Extension:AttackerRead(attacker, root)
     end
     return nil
 end
+-- Checked defensive route: the straight path must be walkable (no wall hit,
+-- floor at the middle and the end) and stay on the locked court. If it is
+-- not, try up to four rotations of the same spot around the attacker; if all
+-- fail, hold instead of reusing an unchecked stale target. WalkClear costs 5
+-- raycasts, so one decision uses at most 25.
+Extension.DefenseRayBudget = 25
+function Extension:SafeDefenseTarget(here, target, pivot, params)
+    self.DefenseRaycasts = 0
+    if not params then return target, nil end
+    local function ok(point)
+        if self.MatchGoal and self.MatchPosition and not self:MatchPosition(point) then return false end
+        if dflat(point-here).Magnitude < 0.5 then return true end
+        if self.DefenseRaycasts+5 > self.DefenseRayBudget then return false end
+        self.DefenseRaycasts = self.DefenseRaycasts+5
+        return self:WalkClear(here, point, params)
+    end
+    if ok(target) then return target, nil end
+    local arm = dflat(target-pivot)
+    if arm.Magnitude < 0.5 then return nil, "blocked: no detour around the attacker" end
+    for _, degrees in ipairs({25, -25, 50, -50}) do
+        local point = pivot+drotate(arm, degrees)
+        point = Extension.Environment.Vector3.new(point.X, here.Y, point.Z)
+        if ok(point) then return point, string.format("detour %+d deg", degrees) end
+    end
+    return nil, "blocked: holding"
+end
 -- One defensive decision. Returns the movement target (or nil to hold) and
 -- the reason, plus sets DefenseFacing toward the attacker.
 function Extension:DefenseStep(character, humanoid, root, attacker)
@@ -2759,18 +2993,39 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     local goal = self:DefendedGoal(attackerRoot)
     if not goal then self:StopAutoMove(); self.DefenseIntent = "No basket on the attacker's court"; return nil end
     local read = self:AttackerRead(attacker, root)
-    local velocity = read and read.Velocity or dflat(attackerRoot.AssemblyLinearVelocity)
+    local velocity, confidence, motion
+    if read then
+        velocity, confidence, motion = read.Velocity, read.Confidence or 1, read.MotionReason
+    elseif self.MotionRead then
+        velocity, confidence, motion = self:MotionRead(attacker, attacker.Character, attackerRoot)
+    else
+        velocity, confidence, motion = dflat(attackerRoot.AssemblyLinearVelocity), 1, "physics"
+    end
     if velocity.Magnitude > 32 then velocity = dunit(velocity)*32 end
     local here = root.Position
     local gap = dflat(attackerRoot.Position-here).Magnitude
-    local lead = math.max(0.2, math.min(0.5, 0.2+gap/50))
+    -- Auto-play's own tuning (never Blessed's AutoGuardPrediction). Defaults
+    -- (300 ms, adaptive) reproduce the previous 0.2-0.5 s drive lead and the
+    -- 0.3 s side lead.
+    local lead = self.PredictionLead and self:PredictionLead(gap, true) or math.max(0.2, math.min(0.5, 0.2+gap/50))
+    local sideLead = self.AutoPlayOption and self:AutoPlayOption("AutoPlayPrediction")/1000 or 0.3
+    if self.Settings.AutoPlayAdaptivePrediction == false then sideLead = lead end
+    local closeout = self.AutoPlayOption and self:AutoPlayOption("AutoPlayDefenseSpacing") or 4
+    local contestDistance = self.AutoPlayOption and self:AutoPlayOption("AutoPlayContestDistance") or 9
     local rim = self.Environment.Vector3.new(goal.Position.X, here.Y, goal.Position.Z)
     -- Lead drives toward the rim fully; side-to-side crossovers only a
     -- little, enough to offset our slower lateral speed without overshooting.
     local axis = dunit(dflat(rim-attackerRoot.Position))
     local driveVelocity = axis*math.max(0, velocity:Dot(axis))
     local sideVelocity = velocity-axis*velocity:Dot(axis)
-    local predicted = attackerRoot.Position+driveVelocity*lead+sideVelocity*0.3
+    local offset = driveVelocity*lead+sideVelocity*sideLead
+    -- Defense keeps the full lead unless the read was reset (confidence 0):
+    -- scaling it down on direction changes let drives past in the benchmark
+    -- (lockdown profile: 1.50 vs 1.41 points allowed per possession).
+    if self.PredictionOffset then offset = self:PredictionOffset(offset, 1, (confidence or 0) > 0 and 1 or 0) end
+    local predicted = self.BoundPredictedPosition and self:BoundPredictedPosition(attackerRoot.Position, offset)
+        or attackerRoot.Position+offset
+    self.LastDefensePrediction = {Reason=motion, Lead=lead, SideLead=sideLead, Confidence=confidence, Offset=offset.Magnitude}
     local attackerFlat = self.Environment.Vector3.new(predicted.X, here.Y, predicted.Z)
     local toRim = dflat(rim-attackerFlat)
     local rimDistance = toRim.Magnitude
@@ -2783,17 +3038,16 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     local mode, spacing
     if self.TurnoverRetreat and (along>3 or rimDistance<10 or self.Clock-(self.TurnoverAt or self.Clock)>2.5) then self.TurnoverRetreat=nil end
     local camping = self.AdaptiveRimOnly == true
-    if camping and rimDistance > 55 then self.CampFarSince = self.CampFarSince or self.Clock else self.CampFarSince = nil end
-    if camping and rimDistance >= 20 then
-        -- Conditional rim strategy: stay deep on the attacker-rim line and
-        -- react laterally; step up when the attacker lingers far out, and
-        -- use normal rim protection/contests once he comes inside 20 studs.
-        local deep = math.min(9, rimDistance*0.5)
-        if self.CampFarSince and self.Clock-self.CampFarSince > 6 then
-            mode = "Rim strategy: step up"
-            deep = math.min(rimDistance-12, 25)
-        else mode = "Rim strategy: protect hoop" end
-        spacing = math.max(0.5, rimDistance-deep)
+    self.CampFarSince = nil
+    if camping and not shooterRange then
+        -- Conditional rim strategy, attacker OUT of shooting range: wait on
+        -- the attacker-rim line just inside his range edge (<= 55 studs from
+        -- the rim) so a close-out takes under a second. Live clip: camping
+        -- 9 studs from the rim gave a shooter open threes every possession,
+        -- so inside his range the normal close-out below applies.
+        mode = "Rim strategy: wait at range edge"
+        local stand = math.max(9, math.min(55, rimDistance-14))
+        spacing = math.max(0.5, rimDistance-stand)
     elseif self.TurnoverRetreat and along<3 then
         mode="Transition: protect hoop"
         spacing=math.max(4,rimDistance-10)
@@ -2807,11 +3061,11 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
         mode = "Protect rim"
         spacing = math.max(2.5, math.min(6, rimDistance*0.35))
     elseif shooterRange then
-        mode = "Close out"
-        spacing = 4
+        mode = camping and "Rim strategy: close out shooter" or "Close out"
+        spacing = closeout
     else
         mode = "Contain"
-        spacing = 6
+        spacing = closeout+2
     end
     spacing = math.min(spacing, math.max(0.5, rimDistance-1))
     local target = attackerFlat+direction*spacing
@@ -2827,23 +3081,30 @@ function Extension:DefenseStep(character, humanoid, root, attacker)
     if dflat(target-rim).Magnitude > dflat(attackerFlat-rim).Magnitude+2 then
         target = attackerFlat+direction*math.max(spacing, 2)
     end
-    local params = self:MakeRayParams()
-    if params and not self:HasFloor(target, params) then
-        target = self.LastDefenseTarget or here
-    end
-    self.LastDefenseTarget = target
-    self.DefenseFacing = dunit(dflat(attackerRoot.Position-here))
     self.DefenseGoalPosition = rim
     -- Contest only real shots/dunks or a rising jump close in front.
     local attackerAction = self.GameAction and self:GameAction(attacker.Character)
     local rising = attackerHumanoid.FloorMaterial == self.Environment.Enum.Material.Air
         and attackerRoot.AssemblyLinearVelocity.Y > 8
-    if (attackerAction == "Shooting" or attackerAction == "Dunking" or rising) and gap < 9 and along > -1
+    if (attackerAction == "Shooting" or attackerAction == "Dunking" or rising) and gap < contestDistance and along > -1
         and humanoid.FloorMaterial ~= self.Environment.Enum.Material.Air and self.Clock-self.LastJump >= 0.6 then
         humanoid.Jump, self.LastJump = true, self.Clock
         self.ContestCount = (self.ContestCount or 0)+1
         if self.Log then self:Log("defense", "contest jump ("..tostring(attackerAction or "rising")..")") end
     end
+    local params = self:MakeRayParams()
+    local routeNote
+    target, routeNote = self:SafeDefenseTarget(here, target, attackerFlat, params)
+    self.DefenseRoute = routeNote
+    self.DefenseFacing = dunit(dflat(attackerRoot.Position-here))
+    if not target then
+        self.LastDefenseTarget = nil
+        self.DefenseMode = mode
+        self:StopAutoMove()
+        self.DefenseIntent = mode..": "..routeNote
+        return nil
+    end
+    self.LastDefenseTarget = target
     self.DefenseMode = mode
     if dflat(target-here).Magnitude < 1 then
         self:StopAutoMove()

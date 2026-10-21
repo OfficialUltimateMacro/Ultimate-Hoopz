@@ -1,6 +1,6 @@
 {
-  "sha256": "942ef6c2e412becc070b6477be640d4f94e6fc08bad4090d0e4c083da054fb12",
-  "checked_at": "2026-10-20T00:12:47.017221+00:00",
+  "sha256": "a88805d4b09eac64f399a868c4f995f903769924e55433186d9ac2ff9593f75c",
+  "checked_at": "2026-10-21T01:04:31.504169+00:00",
   "offline_only": true,
   "live_Hoopz_tested": false,
   "suites": [
@@ -23,6 +23,11 @@
       "suite": "test_auto_jump.py",
       "passed": true,
       "output": "PASS: native jump request and state fallback, rising-airborne confirmation, duplicate JumpRequest suppression, one shot after takeoff, blocked jump timeout/retry, cancellation and Space cleanup, physical Space preserved"
+    },
+    {
+      "suite": "test_autoplay_prediction.py",
+      "passed": true,
+      "output": "PASS: install/slider clamps (NaN/inf/0/strings), rebind, fixed vs adaptive horizons, stop/reversal/respawn/root/teleport/stale/rollback/invalid reads, speed+lead caps, adjacent-court bound, defense uses Auto-play spacing/prediction/contest settings, blocked-route detour or hold within 25 rays, DefendedGoal nil edge, cleanup | mean error studs @0.3s: straight old 0.00 new 0.00; crossover old 2.49 n"
     },
     {
       "suite": "test_autoplay_sim.py",
@@ -92,12 +97,17 @@
     {
       "suite": "test_rim_strategy.py",
       "passed": true,
-      "output": "PASS: normal jumper vs strategy drive+dunk, bounded blocked-lane fallback, normal close-out vs deep rim protection facing the attacker, lateral camping, step-up, inside-20 normal contest, loose-ball recovery, opponent scoping"
+      "output": "PASS: normal jumper vs strategy drive+dunk, bounded blocked-lane fallback, shooter in range closed out even under the strategy (facing, lateral), range-edge wait beyond range, close-out within 1.2 s of entering range, inside-20 normal contest, loose-ball recovery, opponent scoping"
     },
     {
       "suite": "test_spacing.py",
       "passed": true,
       "output": "PASS: swept clearance, wider detour, crowded retreat, court boundary, timeout avoidance, .08s inputs and expanded move variety"
+    },
+    {
+      "suite": "test_toss_tracking.py",
+      "passed": true,
+      "output": "PASS: toss over the defender -> guards the catch on the rim side (no idle), own catch not a turnover, close toss contested, shots keep rebound mode | catch-side gap 4.5"
     },
     {
       "suite": "test_ultimate_extensions.py",
@@ -121,9 +131,8 @@
     }
   ],
   "startup": {
-    "suite": "work/test_ultimate_preferences.py",
+    "suite": "work/test_ultimate_preferences.py (release workspace)",
     "passed": true,
-    "output": "reconstructed True nil actions 2872"
-  },
-  "note": "Offline Lua 5.5 mocks of Roblox services. Not live Hoopz verification."
+    "output": "simulated startup with real Blessed UI: ok"
+  }
 }
